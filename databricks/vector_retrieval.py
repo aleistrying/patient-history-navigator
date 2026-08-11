@@ -133,18 +133,41 @@ class AdvancedRetriever:
         return "\n\n".join(blocks)
 
     def source_summaries(self, hits: list[SearchHit]) -> list[dict[str, Any]]:
-        return [
-            {
+        """One entry per source *document*, not per retrieved chunk.
+
+        `retrieve` returns chunks, and several of them routinely come from the same
+        document, so a per-chunk list showed the same PDF three times over and made
+        the evidence panel look like padding. Collapsing by document_id keeps the
+        list honest about how many records back the answer.
+
+        The first chunk seen for a document is its best one -- `hits` arrives sorted
+        by (rrf_score, score) descending -- so its ids and scores are the ones kept,
+        and iterating in order means the deduplicated list stays ranked by relevance.
+        `chunk_count` records how many retrieved chunks agreed on that document,
+        which is itself a strength signal worth showing rather than discarding.
+
+        A hit with no document_id keys on its chunk_id instead, so missing metadata
+        cannot silently fuse unrelated chunks into one phantom document.
+        """
+        summaries: dict[str, dict[str, Any]] = {}
+        for hit in hits:
+            document_id = hit.metadata.get("document_id")
+            key = str(document_id) if document_id else f"chunk:{hit.chunk_id}"
+            existing = summaries.get(key)
+            if existing is not None:
+                existing["chunk_count"] += 1
+                continue
+            summaries[key] = {
                 "chunk_id": hit.chunk_id,
-                "document_id": hit.metadata.get("document_id"),
+                "document_id": document_id,
                 "document_type": hit.metadata.get("document_type"),
                 "document_date": hit.metadata.get("document_date"),
                 "source_path": hit.metadata.get("source_path"),
                 "score": round(hit.score, 6),
                 "rrf_score": round(hit.rrf_score, 6),
+                "chunk_count": 1,
             }
-            for hit in hits
-        ]
+        return list(summaries.values())
 
     def _search_one(
         self,

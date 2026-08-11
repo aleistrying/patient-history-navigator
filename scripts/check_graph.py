@@ -48,6 +48,10 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel  #
 from langchain_core.messages import AIMessage  # noqa: E402
 from mlflow.models.model_config import _set_model_config  # noqa: E402
 
+# Bound now, before load_agent() replaces the name on the module, so the stub below
+# can still reach the real implementation of the pure methods.
+from vector_retrieval import AdvancedRetriever as _RealRetriever  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Stubs for the four things that need a workspace
@@ -127,7 +131,11 @@ class StubRetriever:
         return "\n\n".join(f"[Evidence {i}] {h}" for i, h in enumerate(hits, 1))
 
     def source_summaries(self, hits):  # noqa: ANN001
-        return [{"chunk_id": f"c{i}", "document_id": f"d{i}"} for i, _ in enumerate(hits, 1)]
+        # Delegate to the real implementation rather than imitating it. This method
+        # is pure logic over hits with no network call, so there is nothing to stub,
+        # and a stub that returned one entry per chunk would let the per-document
+        # collapse regress without any check noticing.
+        return _RealRetriever.source_summaries(self, hits)
 
 
 class StubMemoryStore:
@@ -225,6 +233,25 @@ def main() -> int:
     check(StubRetriever.last_call["patient_id"] == "P-TEST",
           "retrieval filtered by patient", str(StubRetriever.last_call["patient_id"]))
     check(len(meta["sources"]) == 1, "sources returned", str(len(meta["sources"])))
+
+    # Retrieval returns chunks and several routinely come from one document, so the
+    # evidence list is per document. Two chunks of one document must be one source
+    # carrying a count of two, not two rows naming the same PDF.
+    StubRetriever.hits = [
+        hit("first passage", document_id="doc-A"),
+        hit("second passage", document_id="doc-A", score=0.44),
+        hit("other document", document_id="doc-B", score=0.41),
+    ]
+    _answer, meta = sa._execute(request(sa, "what do the labs say?"))
+    sources = meta["sources"]
+    check(len(sources) == 2, "three chunks from two documents give two sources",
+          f"got {len(sources)}")
+    counts = {s.get("document_id"): s.get("chunk_count") for s in sources}
+    check(counts.get("doc-A") == 2 and counts.get("doc-B") == 1,
+          "chunk_count records how many chunks agreed", str(counts))
+    check([s.get("document_id") for s in sources] == ["doc-A", "doc-B"],
+          "deduplicated sources stay ranked by relevance",
+          str([s.get("document_id") for s in sources]))
 
     # ---- no evidence: the model must not be asked to invent one ----------
     StubRetriever.hits = []

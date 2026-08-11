@@ -11,7 +11,12 @@ Required environment variables (Vercel project settings, not the repo):
     PHN_ENDPOINT       optional, defaults to dbdemos-rag-prod
 
 Duration: a cold Model Serving endpoint takes about a minute to wake, and a
-tool-backed answer runs 15-35s warm, so vercel.json sets maxDuration to 300s.
+tool-backed answer runs 5-12s warm while a retrieval answer runs 9-28s, so
+vercel.json sets maxDuration to 300s. That 300 is genuinely available here and is
+not silently clamped: the project runs on fluid compute, and the Vercel API
+reports functionDefaultTimeout=300 for this (Hobby) project with the deployment's
+resolved functionTimeout also 300. Verify before changing it -- the numbers below
+are derived from maxDuration and have to move with it.
 """
 
 import json
@@ -21,7 +26,22 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 ENDPOINT = os.environ.get("PHN_ENDPOINT", "dbdemos-rag-prod")
-TIMEOUT_SECONDS = 280
+
+# Must match vercel.json's maxDuration for "api/ask.py". Everything below is a
+# budget carved out of it, because the client timeout has to expire *before* the
+# platform kills the function: if the platform wins, the socket dies with no body
+# and the browser can only report a bare "Failed to fetch", with no way to tell
+# the user what happened. If the platform loses, the caller gets real JSON.
+MAX_DURATION_SECONDS = 300
+# Held back for the function's own cold start, reading the request, and writing
+# the response, so the last attempt still has room to answer before the cap.
+RESERVED_SECONDS = 20
+# Mirrors ui/app.py's invoke(attempts=2): the endpoint scales to zero and the
+# first call after a pause is what wakes it, so that call times out and the
+# retry is the one that succeeds. Two attempts must fit the budget together --
+# a retry the platform kills mid-flight is worse than no retry at all.
+ATTEMPTS = 2
+TIMEOUT_SECONDS = (MAX_DURATION_SECONDS - RESERVED_SECONDS) // ATTEMPTS
 
 
 def answer_text(response: dict) -> str:
@@ -60,6 +80,44 @@ def call_databricks(payload: dict) -> dict:
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def is_timeout(error: Exception) -> bool:
+    """Whether the call gave up waiting, as opposed to being refused an answer.
+
+    Mirrors ui/app.py's _is_wakeup_timeout. urllib raises the socket timeout
+    wrapped in URLError, so the type check alone misses it and the message check
+    alone is fragile; do both. HTTPError is deliberately excluded by the caller:
+    a 4xx or 5xx is a real reply and retrying it only spends the clock twice.
+    """
+    if isinstance(error, TimeoutError):
+        return True
+    reason = getattr(error, "reason", None)
+    if isinstance(reason, TimeoutError):
+        return True
+    text = f"{error} {reason}".lower()
+    return "timed out" in text or "timeout" in text or "deadline" in text
+
+
+def call_databricks_with_retry(payload: dict) -> dict:
+    """Call the endpoint, retrying once past a cold-start timeout.
+
+    Model Serving scales to zero after roughly ten minutes idle. The call that
+    finds it cold is the call that wakes it, so it times out and the next one
+    lands on a running endpoint. ui/app.py has always done this; this path did
+    not, which is why a caller here had to press send again by hand.
+    """
+    last: Exception | None = None
+    for attempt in range(ATTEMPTS):
+        try:
+            return call_databricks(payload)
+        except urllib.error.HTTPError:
+            raise
+        except Exception as exc:
+            last = exc
+            if attempt + 1 >= ATTEMPTS or not is_timeout(exc):
+                raise
+    raise last if last else RuntimeError("The endpoint could not be reached.")
 
 
 class handler(BaseHTTPRequestHandler):
@@ -115,21 +173,31 @@ class handler(BaseHTTPRequestHandler):
             payload["custom_inputs"] = custom
 
         try:
-            response = call_databricks(payload)
+            response = call_databricks_with_retry(payload)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "ignore")[:300]
             self._send(502, {"error": f"Databricks returned {exc.code}. {detail}"})
             return
         except Exception as exc:
-            self._send(
-                504,
-                {
-                    "error": (
-                        f"{exc}. The endpoint scales to zero, so the first question "
-                        "after a pause can take about a minute. Ask again."
-                    )
-                },
-            )
+            # Only a timeout is evidence of a slow or sleeping endpoint. Attaching
+            # the scale-to-zero explanation to every failure made it advice for a
+            # cause we had not established: the endpoint is often demonstrably warm
+            # when a question fails, and telling the user to wait a minute for a
+            # wake-up that already happened sends them looking in the wrong place.
+            if is_timeout(exc):
+                self._send(
+                    504,
+                    {
+                        "error": (
+                            f"The endpoint did not answer within "
+                            f"{TIMEOUT_SECONDS}s, across {ATTEMPTS} attempts. "
+                            "If it had been idle for a while it may still be "
+                            "waking up; ask again."
+                        )
+                    },
+                )
+            else:
+                self._send(502, {"error": f"The endpoint could not be reached. {exc}"})
             return
 
         custom_outputs = response.get("custom_outputs") or {}
