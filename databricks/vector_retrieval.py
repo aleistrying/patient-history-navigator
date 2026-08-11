@@ -24,6 +24,15 @@ except Exception:  # Older package versions may not expose the reranker helper.
     DatabricksReranker = None  # type: ignore[assignment]
 
 
+def _tally(notes: dict[str, Any], key: str, value: str) -> None:
+    """Collect the distinct values a key took across a request's probes.
+
+    Retrieval runs several probes per question and they can take different paths,
+    so a single value would report whichever probe happened to finish last.
+    """
+    notes.setdefault(key, set()).add(value)
+
+
 @dataclass
 class SearchHit:
     chunk_id: str
@@ -78,15 +87,33 @@ class AdvancedRetriever:
         patient_id: str,
         *,
         document_types: list[str] | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> list[SearchHit]:
+        """Retrieve patient-isolated chunks for each query and fuse the rankings.
+
+        `diagnostics` is filled with what actually happened: which search path
+        served each probe, whether the reranker was applied, and which filter
+        syntax the index accepted. Both the hybrid path and the reranker are
+        optional at runtime and degrade to something that looks like a normal
+        answer, so without this there is no way to tell a reranked hybrid result
+        from an unreranked fallback. Pass a fresh dict per request -- the retriever
+        is shared across concurrent requests and keeps no per-request state.
+        """
+        notes = diagnostics if diagnostics is not None else {}
+        notes["reranker_available"] = DatabricksReranker is not None
+
         cache_key = self._cache_key(queries, patient_id, document_types)
         cached = self.cache.get(cache_key)
         if cached is not None:
+            # A cache hit ran no probes, so the path fields below would be empty and
+            # could be misread as a failure. Say so explicitly.
+            notes["cached"] = True
             return cached
+        notes["cached"] = False
 
         ranked_lists: list[list[SearchHit]] = []
         for query in queries:
-            hits = self._search_one(query, patient_id, document_types)
+            hits = self._search_one(query, patient_id, document_types, notes)
             if hits:
                 ranked_lists.append(hits)
 
@@ -174,6 +201,7 @@ class AdvancedRetriever:
         query: str,
         patient_id: str,
         document_types: list[str] | None,
+        notes: dict[str, Any],
     ) -> list[SearchHit]:
         # Standard AI Search endpoints use a filter dictionary. Storage-optimized
         # indexes use a SQL-like filter string. We try both without ever dropping
@@ -188,7 +216,11 @@ class AdvancedRetriever:
                 "'" + value.replace("'", "''") + "'" for value in document_types
             )
             sql_filter += f" AND document_type IN ({values})"
-        filter_candidates: list[Any] = [standard_filters, sql_filter]
+        # Named so a failure can say which syntax the index rejected.
+        filter_candidates: list[tuple[str, Any]] = [
+            ("dict", standard_filters),
+            ("sql", sql_filter),
+        ]
 
         per_query_k = int(self.config.get("per_query_k", 6))
         query_vector = self.embedding.embed_query(query)
@@ -198,10 +230,16 @@ class AdvancedRetriever:
             reranker = DatabricksReranker(
                 columns_to_rerank=[self.schema["chunk_text"], "document_type"]
             )
+        elif bool(self.config.get("use_reranker", True)):
+            # Configured on but unavailable in the installed package. Answers still
+            # come back and look normal, just ranked less well, so record it.
+            _tally(notes, "warnings", "reranker_requested_but_unavailable")
+
+        notes["probes"] = int(notes.get("probes", 0)) + 1
 
         # Preferred path: built-in hybrid search. Databricks combines semantic
         # and keyword ranks with RRF; a reranker can then improve final precision.
-        for filters in filter_candidates:
+        for syntax, filters in filter_candidates:
             try:
                 kwargs: dict[str, Any] = {
                     "query_text": query,
@@ -213,14 +251,27 @@ class AdvancedRetriever:
                 }
                 if reranker is not None:
                     kwargs["reranker"] = reranker
-                return self._parse_response(self.index.similarity_search(**kwargs))
-            except Exception:
+                hits = self._parse_response(self.index.similarity_search(**kwargs))
+                _tally(notes, "paths", "hybrid")
+                _tally(notes, "filter_syntax", syntax)
+                notes["reranked_probes"] = int(notes.get("reranked_probes", 0)) + (
+                    1 if reranker is not None else 0
+                )
+                return hits
+            except Exception as exc:
+                # Both the exception and the syntax matter: an auth or filter-shape
+                # problem reads very differently from a transient index error, and
+                # this path silently downgrades to the fallback below.
+                notes["hybrid_failures"] = int(notes.get("hybrid_failures", 0)) + 1
+                notes.setdefault(
+                    "first_hybrid_error", f"{syntax}: {type(exc).__name__}: {exc}"[:300]
+                )
                 continue
 
         # Compatibility fallback: ANN plus full-text, fused locally. This path
         # remains patient-filtered for both standard and storage-optimized syntax.
         last_error: Exception | None = None
-        for filters in filter_candidates:
+        for syntax, filters in filter_candidates:
             try:
                 ann = self._parse_response(
                     self.index.similarity_search(
@@ -240,11 +291,26 @@ class AdvancedRetriever:
                             query_type="FULL_TEXT",
                         )
                     )
-                except Exception:
+                except Exception as exc:
                     lexical = []
+                    notes["fulltext_failures"] = (
+                        int(notes.get("fulltext_failures", 0)) + 1
+                    )
+                    notes.setdefault(
+                        "first_fulltext_error", f"{type(exc).__name__}: {exc}"[:200]
+                    )
+                # Semantic-only is a further degradation worth distinguishing: the
+                # keyword half of the hybrid is simply missing.
+                _tally(notes, "paths", "ann+full_text" if lexical else "ann_only")
+                _tally(notes, "filter_syntax", syntax)
                 return self._local_rrf([ann, lexical], per_query_k)
             except Exception as exc:
                 last_error = exc
+                notes["fallback_failures"] = int(notes.get("fallback_failures", 0)) + 1
+                notes.setdefault(
+                    "first_fallback_error",
+                    f"{syntax}: {type(exc).__name__}: {exc}"[:300],
+                )
         if last_error is not None:
             raise last_error
         return []
@@ -303,12 +369,20 @@ class AdvancedRetriever:
             )
         return hits
 
-    @staticmethod
-    def _local_rrf(ranked_lists: list[list[SearchHit]], limit: int) -> list[SearchHit]:
+    def _local_rrf(
+        self, ranked_lists: list[list[SearchHit]], limit: int
+    ) -> list[SearchHit]:
+        """Fuse the fallback path's two rankings, using the configured constant.
+
+        This path previously hardcoded 60 while `rrf_constant` was configurable, so
+        tuning it changed the hybrid path only. The default is 60, so the fused
+        order is unchanged under the delivered config.
+        """
+        rrf_constant = int(self.config.get("rrf_constant", 60))
         fused: dict[str, SearchHit] = {}
         for ranked in ranked_lists:
             for rank, hit in enumerate(ranked, start=1):
-                contribution = 1.0 / (60 + rank)
+                contribution = 1.0 / (rrf_constant + rank)
                 existing = fused.get(hit.chunk_id)
                 if existing is None:
                     hit.rrf_score = contribution

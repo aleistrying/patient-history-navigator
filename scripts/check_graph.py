@@ -119,12 +119,24 @@ class StubRetriever:
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
-    def retrieve(self, queries, patient_id, document_types=None):  # noqa: ANN001
+    def retrieve(self, queries, patient_id, document_types=None,  # noqa: ANN001
+                 diagnostics=None):
         StubRetriever.last_call = {
             "queries": list(queries),
             "patient_id": patient_id,
             "document_types": document_types,
         }
+        if diagnostics is not None:
+            # Mirror what the real retriever records on a clean hybrid run, so the
+            # span assertions below exercise the keys the deployed path fills.
+            diagnostics.update({
+                "cached": False,
+                "probes": len(queries),
+                "reranker_available": True,
+                "reranked_probes": len(queries),
+                "paths": {"hybrid"},
+                "filter_syntax": {"dict"},
+            })
         return list(StubRetriever.hits)
 
     def format_context(self, hits):  # noqa: ANN001
@@ -321,6 +333,20 @@ def main() -> int:
     present = set((retrieval_span.attributes or {}) if retrieval_span else {})
     check(wanted_attributes <= present, "six retrieval metrics on the span",
           f"missing: {sorted(wanted_attributes - present)}")
+
+    # Which search path served is not visible in the answer: an unreranked fallback
+    # carries the same citations and format as a reranked hybrid result, just worse
+    # evidence. The span has to say so, or that downgrade is undetectable.
+    provenance = {
+        "retrieval.path", "retrieval.filter_syntax", "retrieval.cached",
+        "retrieval.probes_run", "retrieval.reranked_probes",
+        "retrieval.reranker_available", "retrieval.hybrid_failures",
+    }
+    check(provenance <= present, "search path recorded on the span",
+          f"missing: {sorted(provenance - present)}")
+    attributes = (retrieval_span.attributes or {}) if retrieval_span else {}
+    check(attributes.get("retrieval.path") == "hybrid",
+          "the path taken is named", str(attributes.get("retrieval.path")))
 
     root = next((s for s in trace.data.spans if s.name == "patient_history_request"), None)
     root_attributes = set((root.attributes or {}) if root else {})

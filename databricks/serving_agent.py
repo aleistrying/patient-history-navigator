@@ -652,10 +652,16 @@ def _retrieve_with_trace(
 ) -> list[SearchHit]:
     """Expose retrieval as a dedicated MLflow span while preserving patient filters."""
 
+    # Filled by the retriever with which search path actually served each probe.
+    # Both the hybrid path and the reranker are optional at runtime and degrade to
+    # an answer that looks completely normal -- same citations, same format, worse
+    # evidence -- so the trace has to say which one ran.
+    diagnostics: dict[str, Any] = {}
     hits = retriever.retrieve(
         queries=queries,
         patient_id=patient_id,
         document_types=document_types,
+        diagnostics=diagnostics,
     )
     # Retrieval metrics on the span itself, so the Tracing UI shows how many
     # probes ran and how well they scored, not just that retrieval happened.
@@ -678,6 +684,39 @@ def _retrieve_with_trace(
                     "retrieval.mean_score": round(sum(scores) / len(scores), 6) if scores else 0.0,
                     "retrieval.top_rrf_score": round(max(fused), 6) if fused else 0.0,
                     "retrieval.distinct_documents": len(documents - {""}),
+                    # Which path served, and whether it was reranked. Sets are
+                    # joined because span attributes take scalars, and a request
+                    # runs several probes that can take different paths.
+                    "retrieval.path": ",".join(
+                        sorted(diagnostics.get("paths") or [])
+                    ) or ("cached" if diagnostics.get("cached") else "none"),
+                    "retrieval.filter_syntax": ",".join(
+                        sorted(diagnostics.get("filter_syntax") or [])
+                    ) or "none",
+                    "retrieval.cached": bool(diagnostics.get("cached")),
+                    "retrieval.probes_run": int(diagnostics.get("probes", 0)),
+                    "retrieval.reranked_probes": int(
+                        diagnostics.get("reranked_probes", 0)
+                    ),
+                    "retrieval.reranker_available": bool(
+                        diagnostics.get("reranker_available")
+                    ),
+                    "retrieval.hybrid_failures": int(
+                        diagnostics.get("hybrid_failures", 0)
+                    ),
+                    "retrieval.fulltext_failures": int(
+                        diagnostics.get("fulltext_failures", 0)
+                    ),
+                    "retrieval.warnings": ",".join(
+                        sorted(diagnostics.get("warnings") or [])
+                    ) or "none",
+                    # Only present when something downgraded, so an empty string
+                    # here means the preferred path served every probe.
+                    "retrieval.first_error": str(
+                        diagnostics.get("first_hybrid_error")
+                        or diagnostics.get("first_fallback_error")
+                        or ""
+                    ),
                 }
             )
     except Exception:
