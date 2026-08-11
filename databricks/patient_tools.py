@@ -22,6 +22,7 @@ edit them with that test to hand.
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Annotated, Any
 
 from langchain_core.tools import InjectedToolArg, StructuredTool
@@ -42,7 +43,12 @@ def normalise_date(value: Any, *, end_of_year: bool = False) -> str | None:
     """Accept what the model supplies and make it a date SQL can parse.
 
     The model legitimately answers "between 2014 and 2026" with bare years, which
-    DATE('2014') will not accept.
+    DATE('2014') will not accept. A bare year means different things at each end of
+    a range, hence `end_of_year`: as a start it is 1 January, as an end it is 31
+    December, and a range ending on 1 January would exclude the year asked about.
+
+    Returns None for anything unparseable, so the filter is dropped rather than
+    passed to SQL broken. `scripts/check_dates.py` covers the cases.
     """
     # The model occasionally emits a value with stray quoting from malformed JSON,
     # e.g. "2023-01-01', ". Trim that rather than discarding an otherwise valid
@@ -52,11 +58,23 @@ def normalise_date(value: Any, *, end_of_year: bool = False) -> str | None:
         return None
     if re.fullmatch(r"\d{4}", text):
         return f"{text}-12-31" if end_of_year else f"{text}-01-01"
+    # Shape is not enough: "2014-13-45" matches the pattern and is not a date, and
+    # every value here is interpolated into SQL. Ask the calendar.
     if re.fullmatch(r"\d{4}-\d{2}", text):
+        if not _is_real_date(f"{text}-01"):
+            return None
         return f"{text}-28" if end_of_year else f"{text}-01"
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) and _is_real_date(text):
         return text
     return None
+
+
+def _is_real_date(text: str) -> bool:
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _clean(value: Any) -> str | None:
