@@ -16,9 +16,10 @@ significance.
 **<https://patient-history-navigator.vercel.app>** — password **`demo`**
 
 No install and no Databricks login. Pick one of five synthetic patients and ask.
-The serving endpoint scales to zero after about ten minutes idle, so if the page
-has been quiet the first question takes roughly a minute; the **Wake it now**
-button on the picker screen starts it warming while you read the roster.
+The serving endpoint scales to zero after about ten minutes idle — it releases its
+compute, and the next request has to start it again. That first request ("cold
+start") takes roughly a minute. The **Wake it now** button on the picker screen
+starts the endpoint warming while you read the roster.
 
 ## Layout
 
@@ -30,11 +31,33 @@ button on the picker screen starts it warming while you read the roster.
 | `data-generator/` | The Synthea CCDA-to-PDF generator that produced the corpus. |
 | `docs/` | Architecture, implementation guide, validation report, changelog, demo runbook. |
 | `deliverables/` | The report, slide deck and study guide. |
-| `scripts/` | `ask.sh` for querying the deployed endpoint, two tracked MLflow experiments, the eight-tool regression check, and the builders that generate the deliverables. |
+| `scripts/` | `ask.sh` for querying the deployed endpoint, two tracked MLflow experiments, five test suites, and the builders that generate the deliverables. |
 
-The generated corpus itself is **not** in this repository. 10,564 files live in a
-Unity Catalog Volume at `/Volumes/workspace/default/rag/generated_patient_records`,
-which is where the ingestion job reads them from.
+This is a local git repository. `docs/`, `deliverables/` and the generated corpus
+under `data-generator/data/` are gitignored: the first two are prose and built
+binaries, and the corpus is ~700 MB that also lives in the Volume the ingestion job
+reads from.
+
+## The corpus
+
+The generated corpus is **not** in this repository. 10,564 files live in a Unity
+Catalog Volume at `/Volumes/workspace/default/rag/generated_patient_records`, which
+is where the ingestion job reads them from. Those files cover **108 generated
+patients as 5,172 PDFs**, plus metadata sidecars, manifests and the source CCDA XML.
+
+Only five of those patients are ingested. What the Delta tables actually hold:
+
+| | |
+| --- | --- |
+| Ingested Synthea patients | 5, selected by `file_glob: patient_7*/documents/**/*` |
+| Their documents / chunks | **225 documents, 1,378 chunks** |
+| Plus the seeded `demo-patient` | 8 documents, which the release evaluation set depends on |
+| Table totals | **6 patient IDs, 233 documents** |
+
+The other 103 generated patients were never parsed, embedded or indexed. The subset
+stays at five because every count in the evaluation set, the UI roster and the graded
+documents is tied to it. It is not a throughput limit: the embedding endpoint sustains
+22 chunks/s at batch 16, which puts the full corpus at about 18 minutes.
 
 ## The files in `databricks/`, and what each one does
 
@@ -43,9 +66,11 @@ the directory listing.
 
 | File | Responsibility |
 | --- | --- |
-| `serving_agent.py` | The MLflow `ResponsesAgent` that is served. Resolves the patient, lets the model choose a tool, runs it or falls back to retrieval, and updates memory. |
-| `record_tools.py` | The eight deterministic functions: timeline, comparison, lab trend, medication changes, document count, document list, document read, patient selection. |
-| `vector_retrieval.py` | Databricks AI Search: patient-filtered probes, Reciprocal Rank Fusion, reranking. |
+| `orchestration.py` | The request graph: eight nodes and the one branch between them. Topology only — node bodies are injected. |
+| `serving_agent.py` | The MLflow `ResponsesAgent` that is served. Supplies the node bodies, the prompts, the clients and the trace spans. |
+| `patient_tools.py` | The eight tools as LangChain `StructuredTool`s — one object per tool declaring both the schema the model sees and the function that runs. |
+| `record_tools.py` | The record layer: the SQL and Python behind the eight operations. Every number in an answer is computed here. |
+| `vector_retrieval.py` | Databricks AI Search: patient-filtered probes, Reciprocal Rank Fusion (RRF — merges several ranked result lists by rank rather than by score), reranking. |
 | `query_strategies.py` | Query expansion — reformulation, decomposition, multi-query, HyDE, hypothetical questions. |
 | `session_memory.py` | Persistent per-user, per-session state in a Unity Catalog managed memory store. |
 | `sql_execution.py` | Statement execution against the SQL warehouse, with identifier validation and literal escaping. |
@@ -57,6 +82,40 @@ the directory listing.
 | `navigator_config.yaml` | Every tunable parameter: models, chunking, retrieval depth, thresholds, tables. |
 | `evaluation_set.json` | The rows the quality gate scores before any model is registered. |
 | `release_job.yml` | The four-task job: seed, set up memory, ingest, release. |
+| `requirements.txt` | Serving dependencies, including `langgraph>=1.0,<2`. |
+
+### One request
+
+One request is a compiled LangGraph `StateGraph` — a state machine whose nodes each
+read and write named keys of one shared state dict. Eight nodes:
+
+```text
+load_memory -> route -+-> run_tool -> explain_tool ----------+-> save_memory
+                      |                                      |
+                      +-> expand_queries -> retrieve -> generate_answer
+```
+
+`route` is the only branch, and it is the model's decision: the model picks one tool
+or none, and no tool means retrieval answers. Both paths converge on `save_memory`,
+so every answered turn is persisted the same way.
+
+`patient_id` is never something the model can set. In `patient_tools.py` it is
+declared `Annotated[str, InjectedToolArg]`, which keeps it out of the schema the
+model is shown and makes `invoke` raise if the application fails to bind it. So the
+model chooses the operation; the application chooses the patient.
+
+Three MLflow spans are emitted per request. A span is one timed step recorded inside
+a trace, with its own attributes:
+
+| Span | Type | When |
+| --- | --- | --- |
+| `patient_history_request` | CHAIN | Always — the root span for the request |
+| `tool_selection` | LLM | Always — the model's routing call |
+| `focused_patient_record_tool` | TOOL | Only when a tool answered |
+| `patient_scoped_ai_search` | RETRIEVER | Only when retrieval answered |
+
+The last two are mutually exclusive, which is why groundedness is scored per path
+rather than over all evaluation rows at once.
 
 ## Running it
 
@@ -66,6 +125,9 @@ cd databricks
 databricks bundle validate
 databricks bundle deploy
 databricks bundle run patient_history_release
+
+# re-release without re-ingesting (skips the ~1.5 h embedding task)
+databricks bundle run patient_history_release --only release
 
 # ask the deployed endpoint a question
 cd ..
@@ -87,9 +149,8 @@ script rather than keeping two copies by hand.
 
 ## Regenerating the deliverables
 
-The graded documents are built from source, not edited by hand. Hand-editing is
-what let the previous copies drift: they named modules that had been renamed and
-claimed seven tools when there were eight.
+The graded documents are built from source, not edited by hand, so the module names
+and counts in them come from the code rather than from memory.
 
 ```bash
 pip install python-docx python-pptx
@@ -105,13 +166,38 @@ python3 scripts/refresh_study_guide.py
 ```
 
 `--check` renders the report with LibreOffice and fails if it exceeds four pages,
-which is the only way to know the assignment's cap is met before submitting.
+which is the only way to confirm the assignment's cap is met before submitting.
+`build_technical_report.py` also reads the node names off the compiled graph, so the
+published figure cannot describe a graph the code does not have.
+
+Two files in `deliverables/` are **frozen** and must not be regenerated:
+`Patient_History_Navigator_Technical_Study_Guide_v2.docx` and
+`Patient_History_Navigator_Final_Technical_Report.docx`. The current versions are
+`Patient_History_Navigator_Technical_Study_Guide_v3.docx` and
+`Patient_History_Navigator_Technical_Report_4page.docx`.
 
 ## Checking it still works
 
+Two suites are offline. They need no workspace, no credentials and about a second,
+so they run on every edit:
+
+```bash
+python3 scripts/check_tool_schemas.py  # the 8 generated tool schemas vs. a snapshot
+python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed  (23 checks)
+```
+
+`check_tool_schemas.py` compares the schemas LangChain generates against
+`scripts/tool_schemas_expected.json`. The schemas are derived from the tool
+definitions, and every description in them steers routing, so pinning them catches a
+routing change offline instead of in a live test. `check_graph.py` replaces the four
+external dependencies — chat model, vector index, SQL warehouse, memory store — with
+stubs and drives both paths of the real graph end to end.
+
+The rest need the deployed endpoint, and the last two also need a browser:
+
 ```bash
 python3 scripts/check_tools.py        # 8 tools, with arguments and bare        (17 cases)
-python3 scripts/check_behaviour.py    # real questions, model picks the tool    (31 cases)
+python3 scripts/check_behaviour.py    # real questions, model picks the tool    (27 cases)
 python3 scripts/check_renderer.py     # markdown + escaping, in a browser       (14 cases)
 python3 vercel/verify_deployment.py   # the deployed page, clicked in a browser
 ```
@@ -121,13 +207,9 @@ The last two need `pip install playwright && playwright install chromium`. Run
 passed once while the deployed page was throwing on load and nothing on it could
 be clicked.
 
-Two files in `deliverables/` are **frozen** and must not be regenerated:
-`Patient_History_Navigator_Technical_Study_Guide_v2.docx` and
-`Patient_History_Navigator_Final_Technical_Report.docx`. The current versions are
-`_v3` and `_4page`.
-
 ## Where to read next
 
+- `docs/README.md` — the full technical reference: architecture, measurements, limitations
 - `docs/IMPLEMENTATION_GUIDE.md` — how each stage works and why
 - `docs/VALIDATION_REPORT.md` — what was tested, what was found, what is still open
 - `docs/DEMO_RUNBOOK.md` — a rehearsed five-minute demonstration

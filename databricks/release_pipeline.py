@@ -208,7 +208,7 @@ def log_agent(args: argparse.Namespace, config: dict[str, Any]):
                 "databricks-ai-search>=0.60,<1",
                 "langchain-core>=0.3,<1",
                 "langchain-text-splitters>=0.3,<1",
-                "langgraph>=1.0,<2",
+                "langgraph>=0.6,<0.7",
                 "pydantic>=2,<3",
                 "requests>=2.31,<3",
                 "pyyaml>=6,<7",
