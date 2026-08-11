@@ -5,16 +5,17 @@ system a user actually meets, where the model chooses the tool and its arguments
 so a failure here can be wrong selection, a wrong argument, or a wrong answer, and
 the report distinguishes them.
 
-Five groups, because they fail for different reasons:
+Four groups, 27 cases, because they fail for different reasons:
 
-  simple      one obvious tool, one obvious answer
-  retrieval   open questions that must NOT call a tool, and must cite documents
-  complex     arguments the model has to extract: dates, measurement names, ranges
-  edge        absent data, refusals, malformed input, ambiguity
-  session     multi-turn, where memory carries the patient and the follow-up
+  simple      one obvious tool, one obvious answer                      (6)
+  retrieval   open questions that must NOT call a tool, and must cite documents  (3)
+  complex     arguments the model has to extract: dates, measurement names, ranges (7)
+  edge        absent data, refusals, malformed input, ambiguity          (11)
 
-Selection is influenced by conversation history, so every single-turn case runs in
-its own conversation_id. The session group deliberately does not.
+Selection is influenced by conversation history, so every case runs in its own
+conversation_id. Multi-turn behaviour, where memory has to carry the patient into a
+follow-up, is covered by scripts/check_ui_queries.py instead, which asks its
+follow-ups through the page in one session.
 
     python3 scripts/check_behaviour.py [--group simple] [--verbose]
 """
