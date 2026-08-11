@@ -28,6 +28,13 @@ PAGE = ROOT / "ui" / "index.html"
 CASES: list[tuple[str, list[str], list[str]]] = [
     ("flagged as high (H) [Evidence 1].",
      ['<em class="cite">Ev 1</em>'], ["[Evidence"]),
+    # Past three, chips collapse into a count: a model citing every chunk it was
+    # given is not really citing, and eight chips in a row read as noise.
+    ("values rose [Evidence 1, 2, 3, 4, 5].",
+     ['<em class="cite">Ev 3</em>', '+2'], ["Ev 4", "Ev 5", "[Evidence"]),
+    # Three still render in full, so the cap does not fire early.
+    ("stable across [Evidence 1, 2, 3].",
+     ['<em class="cite">Ev 3</em>'], ["+", "[Evidence"]),
     ("a 4.3% increase [Evidence 1, Evidence 2].",
      ['<em class="cite">Ev 1</em>', '<em class="cite">Ev 2</em>'], ["[Evidence"]),
     ("values rose [Evidence 1, 2, 3].",

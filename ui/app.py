@@ -122,12 +122,18 @@ def _invoke_via_sdk(payload: dict, timeout: int = 300) -> dict | None:
     """Preferred path. Works locally and inside Databricks Apps."""
     try:
         from databricks.sdk import WorkspaceClient
+        from databricks.sdk.core import Config
     except Exception:
         return None
     # The endpoint scales to zero and the agent makes its own LLM calls, so a cold
     # request can run well past the default client timeout. The warm probe passes a
     # shorter one so it can report "warming" instead of blocking the page.
-    client = WorkspaceClient(http_timeout_seconds=timeout)
+    #
+    # The timeout goes through Config rather than a WorkspaceClient keyword.
+    # WorkspaceClient does not accept http_timeout_seconds -- passing it raises
+    # TypeError, and because every call here is wrapped, that surfaces in the page
+    # as a failed question rather than as a stack trace.
+    client = WorkspaceClient(config=Config(http_timeout_seconds=timeout))
     return client.api_client.do(
         "POST", f"/serving-endpoints/{ENDPOINT}/invocations", body=payload
     )

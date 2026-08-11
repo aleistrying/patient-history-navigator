@@ -133,7 +133,9 @@
        to the sentence rather than as numbers inside it. */
     vertical-align:.12em; margin:0 1px;
   }
-  .reply em.cite + em.cite{ margin-left:2px; }
+  /* A readable gap. Two chips with backgrounds and 2px between them read as one
+     run rather than as separate references. */
+  .reply em.cite + em.cite{ margin-left:5px; }
 
   /* signature: result slip */
   .slip{
@@ -164,12 +166,28 @@
   details.evidence[open] summary::before{content:"▾ "}
   details.evidence ol{margin:10px 0 0; padding:0 0 0 4px; list-style:none}
   details.evidence li{
-    display:flex; gap:10px; padding:5px 0; border-top:1px solid var(--rule);
-    font-size:12.5px;
+    /* Wraps as a whole row when narrow. A non-wrapping row whose only flexible
+       item is .doc lets a long field squeeze it until word-break splits
+       "patient summary" into "patient sum mary". */
+    display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 10px;
+    padding:5px 0; border-top:1px solid var(--rule); font-size:12.5px;
   }
   details.evidence .idx{font-family:var(--mono); color:var(--specimen); width:2.2em;
     flex:none}
-  details.evidence .doc{font-family:var(--mono); color:var(--slate); word-break:break-all}
+  /* Document types are short phrases and are never what makes a row too wide, so
+     they never break. */
+  details.evidence .doc{font-family:var(--mono); color:var(--slate);
+    white-space:nowrap; flex:none}
+  details.evidence .num{flex:none}
+  /* The short document id. min-width:0 is what lets a flex item shrink below its
+     content width, so this ellipsises instead of overflowing. */
+  details.evidence .note{
+    flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; font-family:var(--mono); font-size:12px; color:var(--slate);
+  }
+  /* How many retrieved passages came from this one document. */
+  details.evidence .chunks{flex:none; font-family:var(--mono); font-size:11px;
+    color:var(--slate); opacity:.7}
 
   .notice{
     border:1px solid var(--rule); border-left:3px solid var(--flag-high);
@@ -504,6 +522,47 @@ function documentsSlip(d){
       <table><tbody>${rows}</tbody></table></div>`;
 }
 
+/* Two documents field by field: every changed value, and the fields only one of
+   them records. The prose answer names the changes too, but a clinician reading
+   fourteen of them wants a column to scan, and the arrow gives the direction
+   without the model having to characterise it. */
+function diffSlip(d){
+  const changed = d.changed || [];
+  const onlyLeft = d.only_left || [];
+  const onlyRight = d.only_right || [];
+  if(!changed.length && !onlyLeft.length && !onlyRight.length) return '';
+  /* Recorded values are strings, so direction is only shown where both parse. */
+  const direction = (from, to) => {
+    const a = parseFloat(from), b = parseFloat(to);
+    if(!isFinite(a) || !isFinite(b) || a === b) return ['', 'var(--slate)'];
+    return b > a ? ['↑', 'var(--flag-high)'] : ['↓', 'var(--flag-low)'];
+  };
+  const changedRows = changed.map((c) => {
+    const [mark, colour] = direction(c.from, c.to);
+    return `<tr><td>${esc(c.field)}</td>
+      <td class="v">${esc(String(c.from ?? ''))} → ${esc(String(c.to ?? ''))}</td>
+      <td class="u">${esc(c.unit || '')}</td>
+      <td class="u" style="color:${colour}">${mark}</td></tr>`;
+  }).join('');
+  const onlyRows = (entries, note) => entries.map((e) =>
+    `<tr><td>${esc(e.field)}</td>
+         <td class="v">${esc(String(e.value ?? ''))}</td>
+         <td class="u"></td>
+         <td class="u">${note}</td></tr>`).join('');
+  const stamp = (end) => esc([end.title, end.date].filter(Boolean).join(' · ')
+    || end.document_id || 'document');
+  const left = d.left || {}, right = d.right || {};
+  const similarity = typeof d.similarity === 'number'
+    ? ` · text ${(d.similarity * 100).toFixed(1)}% alike` : '';
+  const omitted = d.omitted ? ` · ${d.omitted} not shown` : '';
+  return `<div class="slip">
+      <div class="slip-head">
+        <span class="field">${stamp(left)} → ${stamp(right)}</span>
+        <span class="field">${changed.length} changed${esc(omitted)}${esc(similarity)}</span></div>
+      <table><tbody>${changedRows}${onlyRows(onlyLeft, 'earlier only')}${
+        onlyRows(onlyRight, 'later only')}</tbody></table></div>`;
+}
+
 function slipFor(toolData){
   if(!toolData || typeof toolData !== 'object') return '';
   if(toolData.kind === 'trend')          return trendSlip(toolData);
@@ -511,6 +570,7 @@ function slipFor(toolData){
   if(toolData.kind === 'counts')         return countsSlip(toolData);
   if(toolData.kind === 'document_list')  return documentListSlip(toolData);
   if(toolData.kind === 'documents')      return documentsSlip(toolData);
+  if(toolData.kind === 'diff')           return diffSlip(toolData);
   return '';
 }
 /* ---------- markdown ----------
@@ -535,7 +595,16 @@ function inlineMd(text){
   s = s.replace(/\[\s*Evidence[^\]]*\]/gi, (match) => {
     const numbers = match.match(/\d+/g);
     if(!numbers) return match;
-    return numbers.map((n) => `<em class="cite">Ev ${n}</em>`).join('');
+    /* join('') leaves no whitespace between chips, so eight of them render as one
+       blob: "Ev 1Ev 2Ev 3...". A space separates them and gives the line somewhere
+       to wrap. Past three, a citation run stops being a reference and becomes
+       noise, so the rest collapse into a count that carries the full list in its
+       tooltip. */
+    if(numbers.length <= 3){
+      return numbers.map((n) => `<em class="cite">Ev ${n}</em>`).join(' ');
+    }
+    return numbers.slice(0, 3).map((n) => `<em class="cite">Ev ${n}</em>`).join(' ')
+      + ` <em class="cite" title="Evidence ${numbers.join(', ')}">+${numbers.length - 3}</em>`;
   });
   return s;
 }
@@ -622,8 +691,15 @@ async function ask(){
     `<p class="field who-label">Navigator</p>
      <div class="working"><span class="dot"></span><span>Reading the record…</span></div>`);
 
+  const started = Date.now();
   try{
-    const res = await fetch('/api/ask', {
+    /* One retry, because a retrieval answer holds the connection open for 10-30s
+       with no bytes flowing, and a connection idle that long is what an
+       intermediary drops. A dropped connection raises TypeError and produces no
+       response at all, so it is safe to send again; anything that did come back
+       is a real reply and is returned as-is. The server path retries a cold
+       endpoint the same way, and without this the user is the retry loop. */
+    const send = () => fetch('/api/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         patient_id: active.id, question, history,
@@ -631,6 +707,13 @@ async function ask(){
         password: sitePassword,
       }),
     });
+    let res;
+    try{
+      res = await send();
+    }catch(dropped){
+      if(!(dropped instanceof TypeError)) throw dropped;
+      res = await send();
+    }
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'The request failed.');
 
@@ -647,14 +730,24 @@ async function ask(){
       const kind = String(s.document_type || '').replace(/_/g, ' ');
       const when = String(s.document_date || '').slice(0, 10);
       const file = String(s.source_path || '').split('/').pop();
-      const label = kind || file || String(s.document_id || '').slice(0, 8) || 'record';
-      return `<li><span class="idx">${i+1}</span>
+      const id   = String(s.document_id || '').slice(0, 8);
+      const label = kind || id || file || 'record';
+      /* The filename is the patient id plus a 36-character UUID and repeats what
+         type and date already say, so it moves to the row's title attribute and
+         the visible column carries the short document id. chunk_count is how many
+         retrieved passages came from this one document: several agreeing is
+         stronger evidence, so it is shown rather than discarded. */
+      const n = Number(s.chunk_count || 0);
+      return `<li${file ? ` title="${esc(file)}"` : ''}><span class="idx">${i+1}</span>
         <span class="doc">${esc(label)}</span>${
-        when ? `<span class="num" style="margin-left:8px">${esc(when)}</span>` : ''}${
-        file && kind ? `<span class="note" style="margin-left:8px">${esc(file)}</span>` : ''}</li>`;
+        when ? `<span class="num">${esc(when)}</span>` : ''}${
+        id && kind ? `<span class="note">${esc(id)}</span>` : ''}${
+        n > 1 ? `<span class="chunks">${n} passages</span>` : ''}</li>`;
     };
+    /* sources carries one entry per document, so this count is the document count. */
     const evidence = sources.length ? `
-      <details class="evidence"><summary>Evidence · ${sources.length} documents</summary>
+      <details class="evidence"><summary>Evidence · ${sources.length} document${
+        sources.length === 1 ? '' : 's'}</summary>
         <ol>${sources.map(sourceRow).join('')}</ol></details>` : '';
     const toolTag = data.tool
       ? `<p class="field who-label">Navigator · ran ${esc(data.tool)}</p>`
@@ -667,9 +760,33 @@ async function ask(){
     // ending in two consecutive user messages on the next question, which is not a
     // conversation the model has any reason to handle sensibly.
     if(history[history.length - 1]?.role === 'user') history.pop();
+    /* Report what happened, not a guess at why. A warm endpoint answering other
+       questions in seconds is the common case, so blaming scale-to-zero on every
+       failure sends the reader looking in the wrong place. The error type is
+       genuinely diagnostic:
+         TypeError   - no response arrived; the connection died.
+         SyntaxError - a response arrived that was not JSON, which is what a
+                       platform-level timeout looks like (a 504 HTML page).
+         Error       - thrown from data.error; the server said why. */
+    const secs = Math.round((Date.now() - started) / 1000);
+    let why;
+    if(err instanceof TypeError){
+      why = `The connection closed after ${secs}s without returning an answer. `
+          + `The question may still have finished on the server. Ask again.`;
+    }else if(err instanceof SyntaxError){
+      why = `The request was cut off after ${secs}s without a complete answer. `
+          + `Ask again.`;
+    }else{
+      why = esc(err.message);
+    }
+    /* Mention the cold start only when the wait was long enough to be one, and
+       only as a possibility. */
+    const cold = secs >= 45
+      ? ` If the endpoint had been idle it may still be waking up; the wake bar on
+          the patient list shows its state.`
+      : '';
     pending.innerHTML = `<p class="field who-label">Navigator</p>
-      <div class="notice">${esc(err.message)} The endpoint scales to zero, so the
-      first question after a pause can take about a minute. Ask again.</div>`;
+      <div class="notice">${why}${cold}</div>`;
   }finally{
     busy = false; $('send').disabled = false; $('entry').focus();
   }

@@ -183,25 +183,30 @@ Answer:""",
 answer_chain = answer_prompt | llm | StrOutputParser()
 
 tool_explanation_prompt = PromptTemplate.from_template(
-    """You are Patient History Navigator. Explain the deterministic Python tool result below.
+    """You are Patient History Navigator. Report the record result below as the answer.
 
 Rules:
-- Treat the tool output as the authoritative result of a specific record operation.
+- Treat the result as authoritative and answer the question directly from it.
+- Report the findings themselves: name each record, value, change and date the
+  result contains, and carry the numbers over exactly as given.
+- Never summarise several findings into a phrase like "various values differ".
+- Never describe the tool, name it, mention that a tool ran, or explain the
+  format, notation or layout of its output.
 - Preserve document IDs and dates.
 - Do not diagnose, prescribe, recommend treatment, or interpret clinical significance.
 - Clearly state when requested inputs or records were missing.
-- Be concise, structured, and explain what the function actually computed.
+- Be concise and structured.
 
 User question:
 {question}
 
-Tool name:
+Record operation:
 {tool_name}
 
-Tool output:
+Result:
 {tool_output}
 
-Explanation:"""
+Answer:"""
 )
 tool_explanation_chain = tool_explanation_prompt | llm | StrOutputParser()
 

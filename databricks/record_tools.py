@@ -25,6 +25,323 @@ from typing import Any
 from sql_execution import DatabricksSQLExecutor, sql_literal, validate_fqn
 
 
+# ---------------------------------------------------------------------------
+# Field-level document comparison
+# ---------------------------------------------------------------------------
+#
+# The stored full_text is the PDF text layer, one line per text run, so a report
+# table arrives as a column-major stream rather than "Label: value" pairs:
+#
+#     Vital Signs        <- section cell
+#     21 Aug 2025        <- date cell
+#     Body Height        <- event cell
+#     52.8 cm            <- value cell
+#     active             <- status cell
+#
+# Long labels and long numbers wrap onto a second line, and a laboratory panel
+# puts the LOINC code between the label and the value and the unit in a column
+# of its own. Nothing in the stream marks where a row begins, so parsing anchors
+# on the cells that can be recognised on sight -- a value, or a status -- and
+# reads the label backwards from there.
+
+# A value cell: a number, optionally followed by its unit on the same line.
+_VALUE_RE = re.compile(r"^([+-]?\d+(?:\.\d+)?)(?:\s+(\S.*?))?$")
+# A date cell, in the report's printed form or ISO.
+_DATE_RE = re.compile(r"^(?:\d{1,2} [A-Z][a-z]{2} \d{4}|\d{4}-\d{2}-\d{2})$")
+# A LOINC-style code cell, which sits between a label and its value.
+_CODE_RE = re.compile(r"^\d[\d.]*-\d+$")
+# A bare SNOMED, RxNorm or SNOMED-procedure code, which is a long run of digits
+# carrying no unit. Six digits is the shortest such code the reports print, and
+# no measurement in them is a six-digit integer, so the cut separates the two.
+_BARE_CODE_DIGITS = 6
+# An identifier-style code cell, as the augmented panels print ("DEMO-SODIUM").
+_CODE_TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9]*[-_][A-Z0-9_-]*$")
+# The tail of such a code where the text layer wrapped it ("DEMO-POTASSI" / "UM").
+_CODE_FRAGMENT_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,12}$")
+# Status cells, and the placeholder the generator prints for an absent column.
+_STATUS_CELLS = frozenset(
+    {
+        "active", "completed", "stopped", "cancelled", "final", "amended",
+        "corrected", "preliminary", "registered", "entered-in-error",
+        "not supplied", "unknown",
+    }
+)
+# Column headings, which are label-shaped but name a column, not a measurement.
+_COLUMN_HEADINGS = frozenset(
+    {
+        "section", "date", "event", "value", "status", "measurement", "code",
+        "test", "result", "results", "unit", "units", "reference", "flag",
+        "reference intervals", "observation",
+    }
+)
+# A medication name wraps onto three lines, and the scan needs one more step to
+# reach the cell that bounds it, so it gives up after four.
+_LABEL_MAX_LINES = 4
+# Two labelled values are enough structure to line two documents up on -- a
+# urinalysis records only specific gravity and pH. Below that a document is
+# treated as free text, because a one-field report says less than the text.
+_MIN_FIELDS = 2
+# Running headers and footers the generator prints on every page. A label scan
+# that reaches one of these has walked out of the table it started in.
+_FURNITURE_MARKERS = ("synthetic demonstration data", "ontario synthetic health network")
+# The stop column prints this instead of a date where a medication has not been
+# stopped, and the text layer wraps it, so it is collected ahead of the label.
+_STOP_PROSE_RE = re.compile(r"^ongoing in source\s+", re.IGNORECASE)
+# How many fields of each "only in one document" list a result names.
+_ONLY_LISTED = 40
+
+
+def _is_furniture(line: str) -> bool:
+    """Whether a line is page furniture rather than record content."""
+    lowered = line.lower()
+    return (
+        lowered.startswith(("[page", "page ", "doc:", "patient:", "synthetic demo"))
+        or any(marker in lowered for marker in _FURNITURE_MARKERS)
+    )
+
+
+def _is_code_cell(line: str) -> bool:
+    """Whether a line is a terminology code rather than a measured value."""
+    if _CODE_RE.match(line) or _CODE_TOKEN_RE.match(line):
+        return True
+    return line.isdigit() and len(line) >= _BARE_CODE_DIGITS
+
+
+def _is_unit_cell(line: str) -> bool:
+    """Whether a line is a bare unit, as the laboratory panel's unit column is."""
+    if not line or len(line) > 12 or " " in line:
+        return False
+    if _is_code_cell(line) or _VALUE_RE.match(line):
+        return False
+    if line.lower() in _STATUS_CELLS or line.lower() in _COLUMN_HEADINGS:
+        return False
+    return any(character.isalpha() or character in "%/{" for character in line)
+
+
+def _value_cell(line: str) -> tuple[str, str] | None:
+    """A line read as (number, unit), or None when it is not a value cell.
+
+    The unit has to look like a unit. Without that test an address line --
+    "617 Laurier Boulevard, Toronto, Ontario M5G 1X8" -- reads as the value 617
+    in units of the street name.
+    """
+    match = _VALUE_RE.match(line)
+    if not match:
+        return None
+    unit = (match.group(2) or "").strip()
+    if unit and not _is_unit_cell(unit):
+        return None
+    return match.group(1), unit
+
+
+def _is_code_at(lines: list[str], index: int) -> bool:
+    """Whether the cell at `index` is a code rather than a measured value.
+
+    A column of short codes -- the CVX numbers in an immunization table -- can
+    only be told from a measurement by what follows it. Every measurement in
+    these reports carries a unit, so a bare number sitting directly above the
+    row's status is the code column, not a value.
+    """
+    line = lines[index]
+    if _is_code_cell(line):
+        return True
+    value = _value_cell(line)
+    if value and not value[1] and index + 1 < len(lines):
+        return lines[index + 1].lower() in _STATUS_CELLS
+    return False
+
+
+def _label_before(lines: list[str], index: int) -> tuple[str, str]:
+    """Read a field label backwards from the cell at `index`.
+
+    Returns (label, boundary) where boundary is the line that stopped the scan,
+    which tells a caller what kind of row it is looking at. Code cells are
+    stepped over because a laboratory panel prints the code between the label
+    and the value; a date, a status, a value, a column heading or page furniture
+    ends the label.
+    """
+    parts: list[str] = []
+    position = index - 1
+    boundary = ""
+    while position >= 0 and len(parts) < _LABEL_MAX_LINES:
+        line = lines[position]
+        if not line:
+            break
+        if _is_code_at(lines, position):
+            position -= 1
+            continue
+        # The tail of a code the text layer wrapped, recognised by the code cell
+        # sitting directly above it. Without the second test a short all-capitals
+        # test name -- "ALT" -- would be discarded as a code fragment.
+        if (
+            _CODE_FRAGMENT_RE.match(line)
+            and position >= 1
+            and _is_code_cell(lines[position - 1])
+        ):
+            position -= 1
+            continue
+        if (
+            _DATE_RE.match(line)
+            or _value_cell(line)
+            or _is_furniture(line)
+            or line.lower() in _STATUS_CELLS
+            or line.lower() in _COLUMN_HEADINGS
+        ):
+            boundary = line
+            break
+        parts.append(line)
+        position -= 1
+    return _STOP_PROSE_RE.sub("", " ".join(reversed(parts))), boundary
+
+
+def parse_document_fields(text: str) -> list[tuple[str, str, str]]:
+    """Parse a report's text into (field, value, unit) triples in document order.
+
+    Two kinds of row are recognised. A measured row is anchored on its value
+    cell, so vital signs and laboratory analytes come out as numbers with their
+    units. A recorded-event row -- an immunization or a problem, which has a
+    status but no measurement -- is anchored on its status cell and only counted
+    when a date cell sits immediately above its label, which is what
+    distinguishes a table row from the document's own header block.
+    """
+    lines = [line.strip() for line in str(text or "").splitlines()]
+    fields: list[tuple[str, str, str]] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line or _DATE_RE.match(line) or _is_code_at(lines, index):
+            index += 1
+            continue
+
+        value_match = _value_cell(line)
+        if value_match:
+            number, unit = value_match
+            step = 1
+            # A long decimal is wrapped by the text layer, leaving its remaining
+            # digits on the next line ("68.4501515224" then "2728 %"). Requiring
+            # six fractional digits before joining keeps the next row's integer
+            # value from being read as a continuation of this one.
+            if not unit and len(number.partition(".")[2]) >= 6 and index + 1 < len(lines):
+                tail = _value_cell(lines[index + 1])
+                # A pure run of digits, so a signed or decimal number on the next
+                # line is read as its own value rather than joined onto this one.
+                if tail and tail[0].isdigit():
+                    number += tail[0]
+                    unit = tail[1]
+                    step = 2
+            # A laboratory panel prints the unit as its own column, so it lands
+            # on the line after the value rather than beside it.
+            if not unit and index + step < len(lines) and _is_unit_cell(lines[index + step]):
+                unit = lines[index + step]
+                step += 1
+            label, _boundary = _label_before(lines, index)
+            if label:
+                fields.append((label, number, unit))
+            index += step
+            continue
+
+        if line.lower() in _STATUS_CELLS:
+            # An event row with nothing measured leaves its value column blank,
+            # so the label sits one cell further back than the status.
+            anchor = index - 1 if index and not lines[index - 1] else index
+            label, boundary = _label_before(lines, anchor)
+            if label and _DATE_RE.match(boundary):
+                fields.append((label, line, ""))
+        index += 1
+    return fields
+
+
+def _field_map(fields: list[tuple[str, str, str]]) -> dict[str, tuple[str, str]]:
+    """Ordered field -> (value, unit), keeping every occurrence of a repeated label.
+
+    A report that groups measurements by date can record one label twice, so the
+    second and later occurrences are suffixed with their occurrence number
+    ("Body Height (2)"). Nothing recorded is dropped, and the first occurrence
+    keeps its plain name so two documents still line up on it.
+    """
+    mapping: dict[str, tuple[str, str]] = {}
+    for field, value, unit in fields:
+        key, occurrence = field, 1
+        while key in mapping:
+            occurrence += 1
+            key = f"{field} ({occurrence})"
+        mapping[key] = (value, unit)
+    return mapping
+
+
+def _relative_change(before: str, after: str) -> float | None:
+    """How far a value moved, as a fraction of where it started, or None."""
+    try:
+        first, last = float(before), float(after)
+    except (TypeError, ValueError):
+        return None
+    if first == 0:
+        return None
+    return abs((last - first) / first)
+
+
+def compare_document_fields(
+    left_text: str, right_text: str
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, str]], int, int]:
+    """Compare two documents field by field.
+
+    Returns (changed, only_left, only_right, shared, parsed) where shared counts
+    the fields recorded in both documents and parsed is the larger of the two
+    field counts, which a caller uses to decide whether the documents were
+    field-shaped at all.
+
+    Changed fields are ordered by how far the value moved relative to where it
+    started, largest first, because that is the most informative ordering a
+    document of unrelated measurements admits; fields whose values are not
+    numeric carry no such measure and follow in document order.
+    """
+    left = _field_map(parse_document_fields(left_text))
+    right = _field_map(parse_document_fields(right_text))
+
+    changed: list[dict[str, Any]] = []
+    for field, (value, unit) in left.items():
+        if field not in right:
+            continue
+        later_value, later_unit = right[field]
+        if (value, unit) == (later_value, later_unit):
+            continue
+        changed.append(
+            {
+                "field": field,
+                "from": value,
+                "to": later_value,
+                "unit": unit if unit == later_unit else "",
+                "from_unit": unit,
+                "to_unit": later_unit,
+                "relative": _relative_change(value, later_value),
+            }
+        )
+    changed.sort(key=lambda entry: (entry["relative"] is None, -(entry["relative"] or 0.0)))
+
+    only_left = [
+        {"field": field, "value": " ".join(filter(None, left[field])).strip()}
+        for field in left
+        if field not in right
+    ]
+    only_right = [
+        {"field": field, "value": " ".join(filter(None, right[field])).strip()}
+        for field in right
+        if field not in left
+    ]
+    shared = sum(1 for field in left if field in right)
+    return changed, only_left, only_right, shared, max(len(left), len(right))
+
+
+def _changed_line(entry: dict[str, Any]) -> str:
+    """One changed field as "Label: old -> new unit", or with both units if they differ."""
+    if entry["from_unit"] == entry["to_unit"]:
+        unit = f" {entry['from_unit']}" if entry["from_unit"] else ""
+        return f"- {entry['field']}: {entry['from']} -> {entry['to']}{unit}"
+    left = " ".join(filter(None, (entry["from"], entry["from_unit"])))
+    right = " ".join(filter(None, (entry["to"], entry["to_unit"])))
+    return f"- {entry['field']}: {left} -> {right}"
+
+
 @dataclass
 class ToolResult:
     name: str
@@ -345,46 +662,167 @@ class PatientRecordTools:
                 )
         document_id_a = str(document_id_a)
         document_id_b = str(document_id_b)
-        left = str(by_id[document_id_a].get("full_text") or "").splitlines()
-        right = str(by_id[document_id_b].get("full_text") or "").splitlines()
-        ratio = difflib.SequenceMatcher(None, "\n".join(left), "\n".join(right)).ratio()
-        diff = list(
-            difflib.unified_diff(
-                left,
-                right,
-                fromfile=document_id_a,
-                tofile=document_id_b,
-                lineterm="",
-                n=max(0, min(int(context_lines), 10)),
-            )
-        )
-        max_lines = int(self.config.get("diff_max_lines", 250))
-        clipped = diff[:max_lines]
-        if len(diff) > max_lines:
-            clipped.append(f"... diff clipped after {max_lines} lines ...")
         left_row = by_id[document_id_a]
         right_row = by_id[document_id_b]
+        left_text = str(left_row.get("full_text") or "")
+        right_text = str(right_row.get("full_text") or "")
+        left_lines = left_text.splitlines()
+        right_lines = right_text.splitlines()
+        ratio = difflib.SequenceMatcher(None, left_text, right_text).ratio()
+        max_lines = int(self.config.get("diff_max_lines", 250))
+
         def describe(row: dict[str, Any], document_id: str) -> str:
-            # Title first, then date, then id. An id alone is unreadable, and the
-            # reader needs to know *which* panel was compared, not just that two
-            # laboratory reports were.
+            # Title first, then type, then date, then id. An id alone is
+            # unreadable, and the reader needs to know *which* panel was
+            # compared, not just that two laboratory reports were.
             title = str(row.get("event_name") or "").strip()
             kind = str(row.get("document_type") or "document").strip()
             label = f"{title} ({kind})" if title else kind
-            return f"{label} dated {row.get('document_date')} [{document_id}]"
+            return f"{label} {row.get('document_date')} [{document_id}]"
 
-        output = (
-            note
-            + f"Comparing {describe(left_row, document_id_a)} "
-            f"with {describe(right_row, document_id_b)}.\n"
-            f"Document similarity: {ratio:.1%}\n"
-            f"Removed lines begin with '-'; added lines begin with '+'.\n\n"
-            + "\n".join(clipped or ["No textual differences detected."])
+        def endpoint(row: dict[str, Any], document_id: str) -> dict[str, str]:
+            return {
+                "document_id": document_id,
+                "date": str(row.get("document_date") or ""),
+                "title": str(row.get("event_name") or ""),
+                "type": str(row.get("document_type") or ""),
+            }
+
+        heading = (
+            f"{describe(left_row, document_id_a)} -> "
+            f"{describe(right_row, document_id_b)}."
         )
+        # context_lines stays part of the published tool schema and is still
+        # accepted. A field report has no surrounding context to show, and the
+        # text fallback names the changed passages rather than printing hunks.
+        _ = context_lines
+
+        changed, only_left, only_right, shared, parsed = compare_document_fields(
+            left_text, right_text
+        )
+
+        if parsed >= _MIN_FIELDS:
+            lines = [heading]
+            if changed:
+                lines.append(
+                    f"{len(changed)} of the {shared} fields recorded in both "
+                    "documents changed."
+                )
+            elif shared:
+                lines.append(
+                    f"None of the {shared} fields recorded in both documents changed."
+                )
+            else:
+                lines.append("These documents record no field in common.")
+            listed = changed[:max_lines]
+            lines += [_changed_line(entry) for entry in listed]
+            if len(changed) > len(listed):
+                lines.append(
+                    f"{len(changed) - len(listed)} further changed field(s) are "
+                    "not listed here."
+                )
+            shown_left = only_left[:_ONLY_LISTED]
+            shown_right = only_right[:_ONLY_LISTED]
+            for entries, shown, side in (
+                (only_left, shown_left, "earlier"),
+                (only_right, shown_right, "later"),
+            ):
+                if entries:
+                    lines.append(
+                        f"Only in the {side} document: "
+                        + ", ".join(entry["field"] for entry in shown)
+                        + ("." if len(entries) == len(shown)
+                           else f", and {len(entries) - len(shown)} more.")
+                    )
+            # Everything the result declined to name, so the count the reader
+            # sees always accounts for the whole comparison.
+            omitted = (
+                len(changed) - len(listed)
+                + len(only_left) - len(shown_left)
+                + len(only_right) - len(shown_right)
+            )
+            lines.append(f"Text similarity {ratio:.1%}.")
+            lines.append(
+                "These are the recorded values as stored; no clinical "
+                "significance is inferred."
+            )
+            return ToolResult(
+                name="compare_patient_documents",
+                output=note + "\n".join(lines),
+                source_document_ids=[document_id_a, document_id_b],
+                data={
+                    "kind": "diff",
+                    "similarity": ratio,
+                    "left": endpoint(left_row, document_id_a),
+                    "right": endpoint(right_row, document_id_b),
+                    "changed": [
+                        {
+                            "field": entry["field"],
+                            "from": entry["from"],
+                            "to": entry["to"],
+                            "unit": entry["unit"],
+                        }
+                        for entry in listed
+                    ],
+                    "only_left": shown_left,
+                    "only_right": shown_right,
+                    "omitted": omitted,
+                },
+            )
+
+        # Free-text documents carry no labelled values to line up, so the text
+        # itself is compared. Passages are named as removed and added rather
+        # than shown as diff markers, which a reader has to be taught to read.
+        # Running headers differ between any two documents and say nothing about
+        # the record, so they are left out; the ids are already in the heading.
+        def content(lines: list[str]) -> list[str]:
+            return [
+                line.strip()
+                for line in lines
+                if line.strip() and not _is_furniture(line.strip())
+            ]
+
+        removed: list[str] = []
+        added: list[str] = []
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, left_lines, right_lines
+        ).get_opcodes():
+            if tag in ("replace", "delete"):
+                removed += content(left_lines[i1:i2])
+            if tag in ("replace", "insert"):
+                added += content(right_lines[j1:j2])
+        budget = max(1, max_lines // 2)
+        lines = [
+            heading,
+            "These documents record no labelled values, so their text was compared.",
+            f"Text similarity {ratio:.1%}.",
+        ]
+        if not removed and not added:
+            lines.append("Their text is identical.")
+        if removed:
+            lines.append(f"Text present only in the earlier document ({len(removed)} line(s)):")
+            lines += [f"  {line}" for line in removed[:budget]]
+            if len(removed) > budget:
+                lines.append(f"  ... {len(removed) - budget} further line(s) not listed.")
+        if added:
+            lines.append(f"Text present only in the later document ({len(added)} line(s)):")
+            lines += [f"  {line}" for line in added[:budget]]
+            if len(added) > budget:
+                lines.append(f"  ... {len(added) - budget} further line(s) not listed.")
         return ToolResult(
             name="compare_patient_documents",
-            output=output,
+            output=note + "\n".join(lines),
             source_document_ids=[document_id_a, document_id_b],
+            data={
+                "kind": "diff",
+                "similarity": ratio,
+                "left": endpoint(left_row, document_id_a),
+                "right": endpoint(right_row, document_id_b),
+                "changed": [],
+                "only_left": [],
+                "only_right": [],
+                "omitted": max(0, len(removed) - budget) + max(0, len(added) - budget),
+            },
         )
 
     # A medication carrying one of these is not in effect, whatever its date.

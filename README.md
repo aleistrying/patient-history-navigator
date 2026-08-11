@@ -31,7 +31,7 @@ starts the endpoint warming while you read the roster.
 | `data-generator/` | The Synthea CCDA-to-PDF generator that produced the corpus. |
 | `docs/` | The full technical reference (`docs/README.md`), implementation guide, validation report, changelog, demo runbook. |
 | `deliverables/` | The report, slide deck and study guide. |
-| `scripts/` | `ask.sh` for querying the deployed endpoint, two tracked MLflow experiments, five test suites, and the builders that generate the deliverables. |
+| `scripts/` | `ask.sh` for querying the deployed endpoint, two tracked MLflow experiments, seven test suites, and the builders that generate the deliverables. |
 
 This is a local git repository. `docs/`, `deliverables/` and the generated corpus
 under `data-generator/data/` are gitignored: the first two are prose and built
@@ -82,7 +82,7 @@ the directory listing.
 | `navigator_config.yaml` | Every tunable parameter: models, chunking, retrieval depth, thresholds, tables. |
 | `evaluation_set.json` | The rows the quality gate scores before any model is registered. |
 | `release_job.yml` | The four-task job: seed, set up memory, ingest, release. |
-| `requirements.txt` | Serving dependencies, including `langgraph>=1.0,<2`. |
+| `requirements.txt` | Serving dependencies, including `langgraph>=0.6,<0.7`. |
 
 ### One request
 
@@ -132,7 +132,7 @@ databricks bundle validate
 databricks bundle deploy
 databricks bundle run patient_history_release
 
-# re-release without re-ingesting (skips the ~1.5 h embedding task)
+# re-release without re-ingesting (skips the ingestion task, measured at 139.6 min)
 databricks bundle run patient_history_release --only release
 
 # ask the deployed endpoint a question
@@ -184,12 +184,13 @@ Two files in `deliverables/` are **frozen** and must not be regenerated:
 
 ## Checking it still works
 
-Two suites are offline. They need no workspace, no credentials and a few seconds, so
+Three suites are offline. They need no workspace, no credentials and a few seconds, so
 they can run on every edit:
 
 ```bash
 python3 scripts/check_tool_schemas.py  # the 8 generated tool schemas vs. a snapshot
-python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed  (23 checks)
+python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed  (26 checks)
+python3 scripts/check_dates.py         # normalise_date, the guard before SQL    (11 cases)
 ```
 
 `check_tool_schemas.py` compares the schemas LangChain generates against
@@ -197,19 +198,31 @@ python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed 
 definitions, and every description in them steers routing, so pinning them catches a
 routing change offline instead of in a live test. `check_graph.py` replaces the four
 external dependencies — chat model, vector index, SQL warehouse, memory store — with
-stubs and drives both paths of the real graph end to end.
+stubs and drives both paths of the real graph end to end. `check_dates.py` calls
+`normalise_date` directly: it is the one function every tool date passes through on its
+way into SQL, so a value it accepts wrongly becomes a query.
 
-The rest need the deployed endpoint, and the last two also need a browser:
+The rest need the deployed endpoint, and the last three also need a browser:
 
 ```bash
-python3 scripts/check_tools.py        # 8 tools, with arguments and bare        (17 cases)
+python3 scripts/check_tools.py        # two cases per tool, plus one single-date case  (17)
 python3 scripts/check_behaviour.py    # real questions, model picks the tool    (31 cases)
 python3 scripts/check_renderer.py     # markdown + escaping, in a browser       (14 cases)
+python3 scripts/check_ui_queries.py   # the real page, driven in a browser      (24 questions)
 python3 vercel/verify_deployment.py   # the deployed page, clicked in a browser
 ```
 
-The last two need `pip install playwright && playwright install chromium`. Run
-`verify_deployment.py` after every `vercel --prod`: string checks and curl both
+The last three need `pip install playwright && playwright install chromium`.
+
+`check_ui_queries.py` starts `ui/app.py` on port 8791, opens the page in Chromium and
+works through 24 questions one turn at a time. Per question it records which tool ran,
+the answer's word count, whether a structured result slip and evidence rendered, and the
+elapsed seconds. Today's run: 24 questions, 0 errors, median 5.9 s, mean 127 words. It is
+the suite that caught `ui/app.py` passing `http_timeout_seconds` to `WorkspaceClient`,
+which the current `databricks-sdk` rejects — that broke every question on a fresh install,
+and only loading the real page showed it.
+
+Run `verify_deployment.py` after every `vercel --prod`: string checks and curl both
 passed once while the deployed page was throwing on load and nothing on it could
 be clicked.
 

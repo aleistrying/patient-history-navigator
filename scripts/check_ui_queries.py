@@ -22,6 +22,7 @@ Exits non-zero if any question fails.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -189,8 +190,13 @@ def main() -> int:
                         continue
 
                     answer = last.locator(".reply").inner_text().strip()
-                    label = last.locator(".who-label").inner_text().strip()
-                    tool = label.split("ran", 1)[1].strip() if "ran" in label else "none"
+                    # text_content, not inner_text: the label is styled
+                    # text-transform: uppercase, and inner_text returns the rendered
+                    # text, so the tool name would come back shouting and the match
+                    # below would miss it.
+                    label = (last.locator(".who-label").first.text_content() or "").strip()
+                    ran = re.search(r"\bran\s+(\S+)", label, re.IGNORECASE)
+                    tool = ran.group(1) if ran else "none"
                     slip = "yes" if last.locator(".slip").count() else "-"
                     evidence = "yes" if last.locator("details.evidence").count() else "-"
                     rows.append((question, purpose, tool, len(answer.split()), slip,
