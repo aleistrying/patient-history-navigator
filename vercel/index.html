@@ -37,12 +37,28 @@
   .roster{
     display:grid; gap:14px; margin:0; padding:0; list-style:none;
     grid-template-columns:repeat(auto-fill,minmax(292px,1fr));
+    /* A grid row is as tall as its tallest card, and .record is only as tall as
+       its own content, so a card with a one-line note used to leave a dead strip
+       (measured: 17px) at the bottom of its own <li>. That strip looks like part
+       of the card but is the <ul>, so a press there hit nothing — and a press
+       there followed by any drag selected the card's text instead of opening it,
+       which is the blue highlight the bug report showed. start keeps every card
+       at exactly the height it has now and makes the <li> stop short with it. */
+    align-items:start;
   }
   .record{
+    /* block, not the button default of inline-block: an inline-block sits on the
+       text baseline, so the line box around it adds descender space below the
+       card that is inside the <li> but outside the click target. */
+    display:block;
     width:100%; text-align:left; background:var(--surface); color:inherit;
     border:1px solid var(--rule); border-left:3px solid var(--rule);
     border-radius:var(--radius); padding:16px 18px 14px;
     transition:border-color .12s, transform .12s, box-shadow .12s;
+    /* The whole card is one click target, so selecting its text is never wanted.
+       Without this, a selection dragged over a card paints the record span and
+       the note blue and no record opens. */
+    -webkit-user-select:none; user-select:none;
   }
   .record:hover{border-left-color:var(--specimen); transform:translateY(-1px);
     box-shadow:0 2px 10px rgba(22,38,47,.06)}
@@ -691,14 +707,35 @@ async function ask(){
     `<p class="field who-label">Navigator</p>
      <div class="working"><span class="dot"></span><span>Reading the record…</span></div>`);
 
+  /* The label inside the pending turn's existing .working row. Retry progress is
+     written into this one text node, so the pulsing dot keeps animating and no new
+     markup or CSS is involved. Declared out here because the failure message below
+     reports how many attempts were made. */
+  const progress = pending.querySelector('.working span:last-of-type');
   const started = Date.now();
+  let attempts = 0;
   try{
-    /* One retry, because a retrieval answer holds the connection open for 10-30s
-       with no bytes flowing, and a connection idle that long is what an
-       intermediary drops. A dropped connection raises TypeError and produces no
-       response at all, so it is safe to send again; anything that did come back
-       is a real reply and is returned as-is. The server path retries a cold
-       endpoint the same way, and without this the user is the retry loop. */
+    /* ---- bounded retry ----
+       A retrieval answer holds the connection open for 8-25s with no bytes
+       flowing, and a connection idle that long is what an intermediary drops.
+       A drop raises TypeError and yields no response at all, so re-sending is
+       safe: the server was never heard from, and re-asking the same question is
+       the same request. Anything that did come back — including a 4xx or 5xx
+       carrying a JSON body — is the server's answer and is surfaced as-is,
+       never retried.
+
+       Four attempts. The endpoint answers in 5-31s when healthy, so a failure is
+       a transient hop problem and one or two more tries clear it; past four,
+       another try is not going to be what fixes it, and the user is better told
+       than left watching. Four also keeps the worst case bounded: three backoff
+       waits total 5s on top of whatever the attempts themselves cost.
+
+       Backoff before each retry, growing, because re-sending immediately down a
+       path that just dropped tends to drop again. */
+    const ATTEMPTS = 4;
+    const BACKOFF_MS = [500, 1500, 3000];   // waited before attempts 2, 3 and 4
+    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
     const send = () => fetch('/api/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -708,11 +745,22 @@ async function ask(){
       }),
     });
     let res;
-    try{
-      res = await send();
-    }catch(dropped){
-      if(!(dropped instanceof TypeError)) throw dropped;
-      res = await send();
+    /* No return or break out of this loop other than the two below, so control
+       always reaches the finally that clears busy: a success breaks, and a
+       failure that is not worth retrying throws to the catch. */
+    for(;;){
+      attempts++;
+      try{
+        res = await send();
+        break;
+      }catch(dropped){
+        if(!(dropped instanceof TypeError) || attempts >= ATTEMPTS) throw dropped;
+        // Say which attempt is coming before waiting for it, so the count is on
+        // screen during the pause rather than only during the request.
+        progress.textContent =
+          `Reading the record… retrying (${attempts + 1} of ${ATTEMPTS})`;
+        await sleep(BACKOFF_MS[attempts - 1]);
+      }
     }
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'The request failed.');
@@ -769,12 +817,16 @@ async function ask(){
                        platform-level timeout looks like (a 504 HTML page).
          Error       - thrown from data.error; the server said why. */
     const secs = Math.round((Date.now() - started) / 1000);
+    /* How many times it tried, in the message, because a reader who watched it
+       retry needs the total to know that retrying is finished and the next move
+       is theirs. */
+    const tries = `${attempts} attempt${attempts === 1 ? '' : 's'} over ${secs}s`;
     let why;
     if(err instanceof TypeError){
-      why = `The connection closed after ${secs}s without returning an answer. `
+      why = `The connection closed without returning an answer — ${tries}. `
           + `The question may still have finished on the server. Ask again.`;
     }else if(err instanceof SyntaxError){
-      why = `The request was cut off after ${secs}s without a complete answer. `
+      why = `The request was cut off without a complete answer — ${tries}. `
           + `Ask again.`;
     }else{
       why = esc(err.message);
