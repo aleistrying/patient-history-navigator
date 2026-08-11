@@ -132,8 +132,6 @@ class StubRetriever:
             diagnostics.update({
                 "cached": False,
                 "probes": len(queries),
-                "reranker_available": True,
-                "reranked_probes": len(queries),
                 "paths": {"hybrid"},
                 "filter_syntax": {"dict"},
             })
@@ -334,13 +332,14 @@ def main() -> int:
     check(wanted_attributes <= present, "six retrieval metrics on the span",
           f"missing: {sorted(wanted_attributes - present)}")
 
-    # Which search path served is not visible in the answer: an unreranked fallback
-    # carries the same citations and format as a reranked hybrid result, just worse
-    # evidence. The span has to say so, or that downgrade is undetectable.
+    # Which search path served is not visible in the answer: the fallback carries the
+    # same citations and format as a hybrid result, just worse evidence. The span has
+    # to say so, or that downgrade is undetectable.
     provenance = {
         "retrieval.path", "retrieval.filter_syntax", "retrieval.cached",
-        "retrieval.probes_run", "retrieval.reranked_probes",
-        "retrieval.reranker_available", "retrieval.hybrid_failures",
+        "retrieval.probes_run", "retrieval.hybrid_failures",
+        "retrieval.fulltext_failures", "retrieval.warnings",
+        "retrieval.first_error",
     }
     check(provenance <= present, "search path recorded on the span",
           f"missing: {sorted(provenance - present)}")

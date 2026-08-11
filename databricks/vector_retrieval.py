@@ -18,10 +18,11 @@ from databricks_langchain import DatabricksEmbeddings
 
 from ttl_cache import TTLCache
 
-try:
-    from databricks.ai_search.reranker import DatabricksReranker
-except Exception:  # Older package versions may not expose the reranker helper.
-    DatabricksReranker = None  # type: ignore[assignment]
+# No reranker here: this workspace serves no reranker model, and passing one makes the
+# index reject the entire hybrid call. The reranker code is kept commented out -- here
+# and in _search_one -- so a workspace that serves one can switch it back on.
+#
+# from databricks.ai_search.reranker import DatabricksReranker
 
 
 def _tally(notes: dict[str, Any], key: str, value: str) -> None:
@@ -50,9 +51,6 @@ class AdvancedRetriever:
         cache_config: dict[str, Any],
     ):
         self.config = config
-        # Read in three places (the span attribute and both branches of the
-        # reranker gate), so resolve the default once rather than repeating it.
-        self.use_reranker = bool(config.get("use_reranker", True))
         self.schema = config["schema"]
         self.index_name = config["vector_search_index"]
         self.embedding = DatabricksEmbeddings(
@@ -95,24 +93,13 @@ class AdvancedRetriever:
         """Retrieve patient-isolated chunks for each query and fuse the rankings.
 
         `diagnostics` is filled with what actually happened: which search path
-        served each probe, whether the reranker was applied, and which filter
-        syntax the index accepted. Both the hybrid path and the reranker are
-        optional at runtime and degrade to something that looks like a normal
-        answer, so without this there is no way to tell a reranked hybrid result
-        from an unreranked fallback. Pass a fresh dict per request -- the retriever
-        is shared across concurrent requests and keeps no per-request state.
+        served each probe and which filter syntax the index accepted. The hybrid
+        path is optional at runtime and degrades to something that looks like a
+        normal answer, so without this there is no way to tell a hybrid result from
+        a fallback one. Pass a fresh dict per request -- the retriever is shared
+        across concurrent requests and keeps no per-request state.
         """
         notes = diagnostics if diagnostics is not None else {}
-        # Available *to this request*, not merely installed. Reranking needs the
-        # package helper and use_reranker together, and reporting the import alone
-        # put reranker_available=True on the span beside reranked_probes=0 whenever
-        # use_reranker was false -- which reads as a silent failure rather than the
-        # configured choice it is.
-        #
-        # Neither input can see the third requirement, a reranker model served in the
-        # workspace, so True still does not promise a reranked answer: a workspace
-        # that rejects the reranker shows up as hybrid_failures plus first_error.
-        notes["reranker_available"] = DatabricksReranker is not None and self.use_reranker
 
         cache_key = self._cache_key(queries, patient_id, document_types)
         cached = self.cache.get(cache_key)
@@ -237,22 +224,16 @@ class AdvancedRetriever:
         per_query_k = int(self.config.get("per_query_k", 6))
         query_vector = self.embedding.embed_query(query)
 
-        reranker = None
-        if self.use_reranker and DatabricksReranker:
-            reranker = DatabricksReranker(
-                columns_to_rerank=[self.schema["chunk_text"], "document_type"]
-            )
-        elif self.use_reranker:
-            # Configured on but unavailable in the installed package. Answers still
-            # come back and look normal, just ranked less well, so record it.
-            # Gated on the config on purpose: under use_reranker false nothing was
-            # requested, so there is nothing to warn about and this stays silent.
-            _tally(notes, "warnings", "reranker_requested_but_unavailable")
+        # Reranker, disabled -- see the note at the top of this module.
+        #
+        # reranker = DatabricksReranker(
+        #     columns_to_rerank=[self.schema["chunk_text"], "document_type"]
+        # )
 
         notes["probes"] = int(notes.get("probes", 0)) + 1
 
         # Preferred path: built-in hybrid search. Databricks combines semantic
-        # and keyword ranks with RRF; a reranker can then improve final precision.
+        # and keyword ranks with RRF.
         for syntax, filters in filter_candidates:
             try:
                 kwargs: dict[str, Any] = {
@@ -263,14 +244,10 @@ class AdvancedRetriever:
                     "num_results": per_query_k,
                     "query_type": "HYBRID",
                 }
-                if reranker is not None:
-                    kwargs["reranker"] = reranker
+                # kwargs["reranker"] = reranker
                 hits = self._parse_response(self.index.similarity_search(**kwargs))
                 _tally(notes, "paths", "hybrid")
                 _tally(notes, "filter_syntax", syntax)
-                notes["reranked_probes"] = int(notes.get("reranked_probes", 0)) + (
-                    1 if reranker is not None else 0
-                )
                 return hits
             except Exception as exc:
                 # Both the exception and the syntax matter: an auth or filter-shape

@@ -104,22 +104,9 @@ retriever_config:
   final_k: 8
   rrf_constant: 60
 
-  # False because this workspace has no reranker model. Passing a reranker makes the
-  # index answer BadRequest: "The Reranker feature is enabled in this workspace,
-  # however a workspace-level configuration is preventing us from accessing the
-  # reranker model." The workspace serves 12 model endpoints and none is a reranker.
-  #
-  # The cost of true is not a missing reranker, it is a missing hybrid search. The
-  # retriever tries a dict filter then a SQL-string filter before falling back, so
-  # true spends 2 rejected calls per probe -- 14 on a 7-probe question -- and then
-  # serves the answer from the local ANN + full-text fallback instead.
-  #
-  # Measured against workspace.default.patient_history_chunks_index: HYBRID with a
-  # dict filter and no reranker returns 6 rows in 0.22s, and the identical call with
-  # a reranker fails. Seven probes cost 5.8s of index time reranked and 1.3s not.
-  # Set this back to true only once `databricks serving-endpoints list` shows a
-  # reranker endpoint in the workspace.
-  use_reranker: false
+  # Commented out along with the reranker code in vector_retrieval.py; nothing reads
+  # this key now. Restore the two together, in a workspace that serves a reranker.
+  # use_reranker: true
 
 query_strategy_config:
   # Best default combination for this project: resolve conversation references,

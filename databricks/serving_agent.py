@@ -94,10 +94,12 @@ required_resources = [
     "embedding_endpoint_name",
     "llm_endpoint_name",
 ]
-missing_resources = [key for key in required_resources if not resources.get(key)]
+missing_resources = [
+    key for key in required_resources if not resources.get(key)]
 if missing_resources:
     raise ValueError(
-        "Missing required databricks_resources values: " + ", ".join(missing_resources)
+        "Missing required databricks_resources values: " +
+        ", ".join(missing_resources)
     )
 if not retriever_config.get("vector_search_index"):
     raise ValueError("retriever_config.vector_search_index is required")
@@ -504,7 +506,8 @@ def _run_tool(
     # keys, so they are harmless; patient_id is assigned last and therefore always
     # wins over anything the caller or the model put there.
     payload = dict(arguments or {})
-    fields = getattr(getattr(tool, "args_schema", None), "model_fields", {}) or {}
+    fields = getattr(getattr(tool, "args_schema", None),
+                     "model_fields", {}) or {}
     if "patient_id" in fields:
         payload["patient_id"] = patient_id
     else:
@@ -580,7 +583,8 @@ def _node_expand_queries(state: NavigatorState) -> dict[str, Any]:
     bundle = query_engine.build(
         question=state["question"],
         chat_history=state["history"],
-        strategies_override=_list_value(state["custom"].get("query_strategies")),
+        strategies_override=_list_value(
+            state["custom"].get("query_strategies")),
     )
     return {"query_bundle": bundle}
 
@@ -656,9 +660,9 @@ def _retrieve_with_trace(
     """Expose retrieval as a dedicated MLflow span while preserving patient filters."""
 
     # Filled by the retriever with which search path actually served each probe.
-    # Both the hybrid path and the reranker are optional at runtime and degrade to
-    # an answer that looks completely normal -- same citations, same format, worse
-    # evidence -- so the trace has to say which one ran.
+    # The hybrid path is optional at runtime and degrades to an answer that looks
+    # completely normal -- same citations, same format, worse evidence -- so the
+    # trace has to say which path ran.
     diagnostics: dict[str, Any] = {}
     hits = retriever.retrieve(
         queries=queries,
@@ -672,8 +676,10 @@ def _retrieve_with_trace(
     try:
         span = mlflow.get_current_active_span()
         if span is not None:
-            scores = [h.score for h in hits if isinstance(h.score, (int, float))]
-            fused = [h.rrf_score for h in hits if isinstance(h.rrf_score, (int, float))]
+            scores = [h.score for h in hits if isinstance(
+                h.score, (int, float))]
+            fused = [h.rrf_score for h in hits if isinstance(
+                h.rrf_score, (int, float))]
             documents = {
                 str(h.metadata.get("document_id") or "") for h in hits if h.metadata
             }
@@ -687,9 +693,9 @@ def _retrieve_with_trace(
                     "retrieval.mean_score": round(sum(scores) / len(scores), 6) if scores else 0.0,
                     "retrieval.top_rrf_score": round(max(fused), 6) if fused else 0.0,
                     "retrieval.distinct_documents": len(documents - {""}),
-                    # Which path served, and whether it was reranked. Sets are
-                    # joined because span attributes take scalars, and a request
-                    # runs several probes that can take different paths.
+                    # Which path served. Sets are joined because span attributes
+                    # take scalars, and a request runs several probes that can
+                    # take different paths.
                     "retrieval.path": ",".join(
                         sorted(diagnostics.get("paths") or [])
                     ) or ("cached" if diagnostics.get("cached") else "none"),
@@ -698,12 +704,6 @@ def _retrieve_with_trace(
                     ) or "none",
                     "retrieval.cached": bool(diagnostics.get("cached")),
                     "retrieval.probes_run": int(diagnostics.get("probes", 0)),
-                    "retrieval.reranked_probes": int(
-                        diagnostics.get("reranked_probes", 0)
-                    ),
-                    "retrieval.reranker_available": bool(
-                        diagnostics.get("reranker_available")
-                    ),
                     "retrieval.hybrid_failures": int(
                         diagnostics.get("hybrid_failures", 0)
                     ),
@@ -749,7 +749,7 @@ def _update_memory(
         ]
     )
     keep = int(memory_config.get("recent_message_limit", 10))
-    memory.recent_messages = memory.recent_messages[-max(2, keep) :]
+    memory.recent_messages = memory.recent_messages[-max(2, keep):]
     # A compact deterministic summary prevents unbounded memory growth and does not
     # require another LLM call. It stores workflow state, not clinical conclusions.
     memory.summary = (
@@ -862,7 +862,7 @@ class PatientHistoryResponsesAgent(ResponsesAgent):
         for start in range(0, len(answer), chunk_size):
             yield ResponsesAgentStreamEvent(
                 **self.create_text_delta(
-                    delta=answer[start : start + chunk_size],
+                    delta=answer[start: start + chunk_size],
                     item_id=item_id,
                 )
             )

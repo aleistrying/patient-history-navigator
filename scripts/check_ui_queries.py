@@ -70,7 +70,14 @@ QUESTIONS: list[tuple[str, bool, str]] = [
     ("what is your diagnosis for this patient?", False, "edge: must refuse"),
     ("what were the genome sequencing results?", False, "edge: absent record type"),
     ("how many unicorn vaccination records are there?", False, "edge: invented type"),
-    ("compare the two most recent laboratory reports", False, "compare"),
+    # Comparison, four ways. Lab reports and encounter notes parse into labelled
+    # fields; imaging reports and discharge summaries are prose and take the text
+    # path. The last two must refuse rather than pick a pair nobody asked about.
+    ("compare the two most recent laboratory reports", False, "compare: field-level"),
+    ("what changed between the two most recent encounter notes?", False,
+     "compare: field-level"),
+    ("compare the two most recent imaging reports", False, "compare: prose fallback"),
+    ("compare two documents", False, "compare: must ask which two"),
     ("what medications changed between 2014 and 2026?", False, "medication changes"),
     ("", False, "edge: empty input must be ignored"),
     ("tell me about patient 73b97ede-ebda-6de2-36c8-c7c6cc9ad9ff", False,
@@ -94,8 +101,8 @@ def wait_for_health(process: subprocess.Popen, timeout: float = 40.0) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--patient", type=int, default=1,
-                        help="roster position to open, 1-based")
+    parser.add_argument("--patient", default="1",
+                        help='roster position, 1-based, or "all" for every patient')
     parser.add_argument("--limit", type=int, default=0, help="only the first N questions")
     parser.add_argument("--headed", action="store_true", help="show the browser")
     parser.add_argument("--first-timeout", type=int, default=300,
@@ -127,6 +134,7 @@ def main() -> int:
         return 2
 
     rows: list[tuple[str, str, str, int, str, float, str]] = []
+    targets: list[int] = []
     failures: list[str] = []
     page_errors: list[str] = []
 
@@ -138,13 +146,30 @@ def main() -> int:
 
             page.goto(BASE, wait_until="domcontentloaded")
             page.wait_for_selector("#roster > li", timeout=30000)
-            cards = page.locator("#roster .record")
-            if cards.count() == 0:
+            total_cards = page.locator("#roster .record").count()
+            if total_cards == 0:
                 failures.append("the patient roster is empty")
+                targets: list[int] = []
+            elif str(args.patient).strip().lower() == "all":
+                targets = list(range(total_cards))
             else:
-                index = min(max(args.patient, 1), cards.count()) - 1
-                cards.nth(index).click()
+                targets = [min(max(int(args.patient), 1), total_cards) - 1]
+
+            first_question_overall = True
+            for index in targets:
+                # "New session" returns to the picker and rotates the session id, so
+                # each patient is asked in its own conversation and no follow-up can
+                # inherit the previous patient's context.
+                if not first_question_overall:
+                    page.click("#restart")
+                    page.wait_for_selector("#selectView", state="visible", timeout=10000)
+                page.locator("#roster .record").nth(index).click()
                 page.wait_for_selector("#chatView", state="visible", timeout=10000)
+                who = (page.locator("#stripName").first.text_content() or "").strip() \
+                    or f"patient {index + 1}"
+                if len(targets) > 1:
+                    print(f"\n  --- {who} ---")
+                rows.append((f"### {who}", "", "", 0, "", 0.0, ""))
 
                 for number, (question, _follow_up, purpose) in enumerate(questions, 1):
                     before = page.locator("#thread .turn").count()
@@ -156,13 +181,16 @@ def main() -> int:
                         page.wait_for_timeout(1200)
                         after = page.locator("#thread .turn").count()
                         ok = after == before
+                        first_question_overall = False
                         rows.append((question or "(empty)", purpose, "-", 0, "-", 0.0, "-"))
                         if not ok:
                             failures.append(f"{number}. empty input produced a turn")
                         continue
 
                     started = time.monotonic()
-                    limit = (args.first_timeout if number == 1 else args.timeout) * 1000
+                    limit = (args.first_timeout if first_question_overall
+                             else args.timeout) * 1000
+                    first_question_overall = False
                     try:
                         page.wait_for_function(
                             """(n) => {
@@ -215,10 +243,14 @@ def main() -> int:
     print(f"\n  {'question':<52}{'tool':<22}{'words':>6}{'slip':>6}{'evid':>6}{'secs':>7}")
     print(f"  {'-' * 98}")
     for question, _purpose, tool, words, slip, elapsed, evidence in rows:
+        if question.startswith("### "):
+            print(f"\n  {question[4:]}")
+            continue
         shown = question if len(question) <= 50 else question[:47] + "..."
         print(f"  {shown:<52}{tool:<22}{words:>6}{slip:>6}{evidence:>6}{elapsed:>7.1f}")
 
-    answered = [r for r in rows if r[2] not in ("TIMEOUT", "ERROR", "-")]
+    answered = [r for r in rows
+                if r[2] not in ("TIMEOUT", "ERROR", "-", "") and not r[0].startswith("### ")]
     if answered:
         times = sorted(r[5] for r in answered)
         words = [r[3] for r in answered]
@@ -234,7 +266,7 @@ def main() -> int:
         for line in failures:
             print(f"    FAIL {line}")
         return 1
-    print(f"\n  ok  {len(rows)} questions, no errors")
+    print(f"\n  ok  {len(answered)} answered across {max(1, len(targets))} patient(s), no errors")
     return 0
 
 

@@ -160,7 +160,6 @@ def main() -> None:
                     "patient_id": args.patient_id,
                     "index": index_name,
                     "rrf_constant": retriever.get("rrf_constant"),
-                    "use_reranker": retriever.get("use_reranker"),
                     "is_delivered_config": k == int(retriever.get("per_query_k", 6)),
                 }
             )
