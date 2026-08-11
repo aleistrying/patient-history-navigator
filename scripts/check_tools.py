@@ -7,9 +7,8 @@ Two cases per tool, because they fail differently:
              default (all documents, all measurements) or say what it needs
 
 The second case is the one worth testing. A tool that quietly invents a default it
-should have asked about returns something that reads like an answer -- the document
-comparison once compared two documents nobody asked for and reported a similarity
-percentage for them.
+should have asked about returns something that reads like an answer -- a comparison
+of two documents nobody asked for, complete with a similarity percentage.
 
 Each tool is pinned through custom_inputs, so this measures the tools themselves
 rather than the model's choice of tool.

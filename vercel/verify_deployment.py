@@ -1,10 +1,9 @@
 """Smoke-test the deployed page in a real browser. Run after every `vercel --prod`.
 
-sync_from_ui.py checks the generated HTML, and the API routes can be curled, and
-both of those passed while the deployed page was completely unusable: a JavaScript
-identifier the gate needed was never declared, so the page threw on load and nothing
-could be clicked. No amount of string-checking finds that. Loading the page and
-clicking does.
+sync_from_ui.py checks the generated HTML and the API routes can be curled, but
+neither catches a page that parses and serves fine yet throws on load — one
+undeclared identifier is enough to leave nothing on the page clickable. Only
+loading the page and clicking through it finds that.
 
     python3 vercel/verify_deployment.py [--url URL] [--password demo]
 

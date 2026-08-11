@@ -2,12 +2,12 @@
 
 ui/index.html carries its own renderMarkdown/inlineMd pair rather than a library,
 because the page's premise is that it is one dependency-free file. That trade means
-the renderer needs its own tests, and it has now had two defects worth keeping a
-regression for:
+the renderer needs its own tests.
 
-  * `[Evidence 1, Evidence 2]` did not match the citation pattern, so the raw
-    brackets appeared in answers while `[Evidence 1]` rendered correctly.
-  * A citation chip containing only "1" read as a stray digit next to prose.
+Citations are the fragile part: the pattern has to cover multi-reference brackets
+like `[Evidence 1, Evidence 2]` and `[Evidence 1, 2, 3]`, not just `[Evidence 1]`,
+and every chip has to keep the "Ev" prefix so a lone number does not read as a
+stray digit next to prose.
 
 Escaping is the case that matters most: every fragment must be HTML-escaped before
 any tag is introduced, so model output cannot inject markup.

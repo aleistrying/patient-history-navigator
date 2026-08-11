@@ -26,10 +26,22 @@ from langchain_core.prompts import PromptTemplate
 
 from ttl_cache import TTLCache
 
+# Every strategy this module implements. Used to reject an unknown name in `build`
+# and, by serving_agent, to report which of them actually ran. One definition so
+# the two cannot disagree and silently under-report.
+STRATEGIES = frozenset(
+    {
+        "reformulation",
+        "decomposition",
+        "multi_query",
+        "hyde",
+        "hypothetical_questions",
+    }
+)
+
 
 @dataclass
 class QueryBundle:
-    original_question: str
     standalone_question: str
     retrieval_queries: list[str]
     strategy_outputs: dict[str, Any] = field(default_factory=dict)
@@ -63,13 +75,7 @@ class QueryStrategyEngine:
             for name in (strategies_override or self.active)
             if str(name).strip()
         ]
-        unknown = sorted(set(active) - {
-            "reformulation",
-            "decomposition",
-            "multi_query",
-            "hyde",
-            "hypothetical_questions",
-        })
+        unknown = sorted(set(active) - STRATEGIES)
         if unknown:
             raise ValueError(f"Unknown query strategies: {unknown}")
         key = self._cache_key(question, chat_history, active)
@@ -123,7 +129,6 @@ class QueryStrategyEngine:
 
         queries = self._deduplicate(expanded)[: self.max_total_queries]
         bundle = QueryBundle(
-            original_question=question,
             standalone_question=standalone,
             retrieval_queries=queries or [question],
             strategy_outputs=outputs,

@@ -15,12 +15,10 @@ there -- and because it keeps a query testable without a model.
 from __future__ import annotations
 
 import difflib
-import json
 import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
 from typing import Any
 
 
@@ -389,10 +387,13 @@ class PatientRecordTools:
             source_document_ids=[document_id_a, document_id_b],
         )
 
+    # A medication carrying one of these is not in effect, whatever its date.
+    _TERMINAL_STATUSES = frozenset({"stopped", "completed", "cancelled"})
+
     # Phrases that ask for "the trend" generally rather than naming one analyte.
     _TREND_OVERVIEW_TERMS = frozenset(
         {
-            "", "lab", "labs", "lab result", "lab results", "laboratory",
+            "lab", "labs", "lab result", "lab results", "laboratory",
             "laboratory result", "laboratory results", "result", "results",
             "test", "tests", "value", "values", "measurement", "measurements",
             "vital", "vitals", "vital sign", "vital signs", "all", "everything",
@@ -1118,7 +1119,7 @@ class PatientRecordTools:
         Needed for questions about what a note actually says. Retrieval returns
         fragments chosen for similarity; this returns whole documents.
         """
-        where, resolved, unresolved = self._document_filters(
+        where, _resolved, unresolved = self._document_filters(
             patient_id, document_type, start_date, end_date)
         if unresolved:
             return self._unknown_type_result(
@@ -1208,11 +1209,13 @@ class PatientRecordTools:
             if not medication or not observed:
                 continue
             sources.append(str(row.get("document_id") or ""))
-            if observed <= earlier_date and status not in {"stopped", "completed", "cancelled"}:
+            if observed <= earlier_date and status not in self._TERMINAL_STATUSES:
                 before.add(medication)
-            if observed <= later_date and status not in {"stopped", "completed", "cancelled"}:
+            # No date test here: the query already bounds document_date by
+            # later_date, so every surviving row is on or before it.
+            if status not in self._TERMINAL_STATUSES:
                 after.add(medication)
-            if status in {"stopped", "completed", "cancelled"}:
+            if status in self._TERMINAL_STATUSES:
                 after.discard(medication)
         added = sorted(after - before)
         removed = sorted(before - after)

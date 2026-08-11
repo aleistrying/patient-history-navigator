@@ -1,8 +1,9 @@
 """Create preview resources that are not created by the ingestion job.
 
 At present this script creates the Unity Catalog managed memory store used for
-persistent session memory. AI Search endpoint/index creation remains in
-preprocessing.py because the embedding dimension is only known after the first batch.
+persistent session memory. AI Search endpoint/index creation lives in
+ingest_records.py, because the embedding dimension is only known after the first
+batch.
 """
 
 from __future__ import annotations

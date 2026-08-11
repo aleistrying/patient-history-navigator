@@ -2,16 +2,15 @@
 
 Why this exists
 ---------------
-The other suites in this directory all talk to the deployed endpoint, so the
-cheapest way to discover that a node reads a state key nobody wrote used to be a
-deploy, a cold start, and a failed live query. That is a slow way to find a typo.
+The other suites in this directory all talk to the deployed endpoint, so finding a
+node that reads a state key nobody wrote costs a deploy, a cold start and a failed
+live query. That is a slow way to find a typo.
 
 Here the four external dependencies -- the chat model, the vector index, the SQL
 warehouse and the memory store -- are replaced by stubs, and the real graph, the
-real nodes, the real tools and the real prompts run against them. It exercises
-what the port to LangGraph actually changed: whether both paths reach an answer,
-whether each node's state contract is satisfied, and whether patient scope still
-cannot be reached by the model.
+real nodes, the real tools and the real prompts run against them. It checks that
+both paths reach an answer, that each node's state contract is satisfied, and that
+patient scope cannot be reached by the model.
 
 It does not check retrieval quality, SQL correctness, or routing judgement -- those
 need the real thing, and check_behaviour.py covers them.
@@ -93,10 +92,9 @@ def hit(text: str, *, document_id: str = "doc-1", score: float = 0.51):
 
     Deliberately the genuine dataclass: the retrieval span reads `.score`,
     `.rrf_score` and `.metadata` off each hit, and `_retrieve_with_trace` wraps
-    that in a bare `except` so telemetry can never fail a request. Feed it
-    duck-typed stubs and all six retrieval metrics vanish silently while every
-    other assertion still passes -- which is exactly what happened when this stub
-    returned plain strings.
+    that in a bare `except` so telemetry can never fail a request. Feed it a
+    duck-typed stub instead and all six retrieval metrics vanish silently while
+    every other assertion still passes.
     """
     from vector_retrieval import SearchHit
 
@@ -266,9 +264,9 @@ def main() -> int:
 
     # ---- MLflow spans ----------------------------------------------------
     # The deck and the report both name these four spans and the retrieval
-    # attributes, so a refactor that silently stopped emitting one would
-    # invalidate documentation as well as observability. Asserted here because
-    # the alternative is reading the Tracing UI by eye after every deploy.
+    # attributes, so an edit that stops emitting one invalidates documentation as
+    # well as observability. Asserted here because the alternative is reading the
+    # Tracing UI by eye after every deploy.
     import mlflow
 
     def spans_for(req) -> dict[str, str]:  # noqa: ANN001

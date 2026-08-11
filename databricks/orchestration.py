@@ -46,9 +46,10 @@ from langgraph.graph import END, START, StateGraph
 class NavigatorState(TypedDict, total=False):
     """Everything one request carries.
 
-    `total=False` because the two paths populate disjoint halves: a tool answer has
-    no `hits`, and a retrieval answer has no `tool_result`. Reading a key the other
-    path owns is then a `KeyError` rather than a plausible-looking empty value.
+    `total=False` because nodes return partial updates and the two paths populate
+    disjoint halves: a tool answer has no `hits`, a retrieval answer no
+    `tool_result`. At runtime the state is a dict, so reading a key the other path
+    owns raises `KeyError` rather than yielding a plausible-looking empty value.
 
     Every key a node reads must be declared here. LangGraph drops input keys the
     schema does not mention, and does so without warning.

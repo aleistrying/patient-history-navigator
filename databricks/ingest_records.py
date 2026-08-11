@@ -9,9 +9,6 @@ This Databricks job:
 6. creates embeddings through a Databricks Model Serving embedding endpoint;
 7. writes full documents and chunks to Unity Catalog Delta tables; and
 8. creates or synchronizes the Databricks AI Search index.
-
-The previous manual linear character chunker is preserved as commented history near
-`split_record_with_langchain`, but it is no longer executed.
 """
 
 from __future__ import annotations
@@ -24,8 +21,8 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -35,7 +32,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp
 from pyspark.sql.types import (
     ArrayType,
@@ -497,7 +494,8 @@ def pypdf_text_is_readable(
 
 def page_ranges(page_count: int, batch_size: int) -> list[str]:
     if page_count <= 0:
-        return ["1-500"]
+        # Page count unknown, so ask for one batch and let the parser stop early.
+        return [f"1-{batch_size}"]
     ranges = []
     for start in range(1, page_count + 1, batch_size):
         end = min(start + batch_size - 1, page_count)
@@ -738,7 +736,6 @@ def _flatten_json(value: Any, prefix: str = "", limit: int = 240) -> list[str]:
 
 def records_from_fhir_bundle(
     path: Path,
-    source_hash: str,
     default_patient_id: str,
 ) -> list[DocumentRecord]:
     with path.open("r", encoding="utf-8") as handle:
@@ -877,22 +874,6 @@ def records_from_plain_file(
             content_hash=content_hash(text),
         )
     ]
-
-
-# Legacy manual chunking retained for project history only. It is deliberately
-# commented out and is NOT executed. The active implementation below uses the
-# LangChain RecursiveCharacterTextSplitter recommended in Databricks RAG examples.
-#
-# def legacy_linear_chunk_text(text: str, size: int, overlap: int) -> list[str]:
-#     step = size - overlap
-#     chunks = []
-#     for start in range(0, len(text), step):
-#         chunk = text[start:start + size].strip()
-#         if chunk:
-#             chunks.append(chunk)
-#         if start + size >= len(text):
-#             break
-#     return chunks
 
 
 def split_record_with_langchain(
@@ -1298,7 +1279,7 @@ def main() -> None:
         if path.suffix.lower() == ".json":
             try:
                 documents = records_from_fhir_bundle(
-                    path, source_hash, settings.default_patient_id
+                    path, settings.default_patient_id
                 )
             except ValueError:
                 # Non-FHIR JSON is treated as readable text so it remains searchable.

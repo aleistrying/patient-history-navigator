@@ -41,8 +41,7 @@ preprocessing_config:
   documents_table: workspace.default.patient_history_documents
   source_table: workspace.default.patient_history_rag_chunks
 
-  # Active chunking implementation: LangChain RecursiveCharacterTextSplitter.
-  # The old manual character loop remains commented in preprocessing.py for history.
+  # Chunking: LangChain RecursiveCharacterTextSplitter.
   chunk_size: 900
   chunk_overlap: 150
   chunk_separators: ["\n\n", "\n", ". ", "; ", ", ", " ", ""]

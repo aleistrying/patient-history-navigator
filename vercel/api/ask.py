@@ -85,11 +85,9 @@ class handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "Wrong password."})
             return
 
-        # The gate only needs to know whether the password is right. It used to prove
-        # that by sending a real question, which meant the gate inherited the
-        # endpoint's cold start: type the password against a scaled-to-zero endpoint
-        # and the button sat on "Checking..." for about a minute before opening. The
-        # password has already been checked above, so answer now and touch nothing.
+        # The password is already checked above, so answer without calling Model
+        # Serving. That keeps the gate off the endpoint's cold-start path, which
+        # would otherwise hold the button on "Checking..." for about a minute.
         if request.get("validate_only"):
             self._send(200, {"ok": True})
             return

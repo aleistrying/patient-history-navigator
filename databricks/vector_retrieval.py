@@ -43,7 +43,6 @@ class AdvancedRetriever:
         self.config = config
         self.schema = config["schema"]
         self.index_name = config["vector_search_index"]
-        self.endpoint_name = resources["vector_search_endpoint_name"]
         self.embedding = DatabricksEmbeddings(
             endpoint=resources["embedding_endpoint_name"]
         )

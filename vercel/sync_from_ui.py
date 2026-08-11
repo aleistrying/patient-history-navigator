@@ -48,9 +48,8 @@ async function unlock(){
   $('gateBtn').disabled = true;
   $('gateMsg').textContent = 'Checking…';
   try{
-    // validate_only checks the password and returns immediately. Sending a real
-    // question here made the gate inherit the endpoint's cold start, so opening the
-    // page could sit on "Checking..." for a minute before letting anyone in.
+    // validate_only checks the password and returns immediately, which keeps the
+    // gate off the endpoint's cold-start path.
     const res = await fetch('/api/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ validate_only: true, password: value }),
@@ -73,19 +72,15 @@ if(sitePassword){ $('gateView').hidden = true; $('selectView').hidden = false; b
 
 
 class AnchorMissing(RuntimeError):
-    """An anchor this script edits is no longer present in ui/index.html."""
+    """An anchor this script edits is missing from ui/index.html."""
 
 
 def must_replace(text: str, anchor: str, replacement: str, what: str) -> str:
     """Replace exactly one anchor, or fail loudly.
 
-    str.replace on a missing anchor silently returns the text unchanged, which is
-    how a broken page got deployed: the declaration of `sitePassword` was anchored
-    to the `let sessionId = ...` line, that line was edited for session
-    persistence, the anchor stopped matching, and the gate threw
-    "sitePassword is not defined" on load. The structural checks below still passed,
-    because they tested that the password was *used* and never that it was
-    *declared*. Every edit is now verified at the point it is made.
+    str.replace on a missing anchor silently returns the text unchanged, so an edit
+    to ui/index.html that moves an anchor would drop one of the gate's injections
+    and still write a page. Failing at the point of each edit is what catches that.
     """
     if anchor not in text:
         raise AnchorMissing(
@@ -109,9 +104,8 @@ def main() -> int:
         '<main class="select-view" id="selectView" hidden>',
         "hide the picker until the gate opens",
     )
-    # Anchored on the 'use strict' preamble rather than any particular variable
-    # line, because variable lines get edited and this declaration must not be
-    # coupled to one.
+    # Anchored on the $ helper because it is stable. Anchors on variable
+    # declarations break as soon as those lines are edited.
     out = must_replace(
         out,
         "const $ = (id) => document.getElementById(id);",
@@ -142,9 +136,8 @@ def main() -> int:
     checks = {
         "gate markup": "gateView" in out,
         "selection hidden": 'id="selectView" hidden' in out,
-        # Declared *and* used. Checking only the use is what let a page deploy
-        # where sitePassword was referenced but never declared, so the gate threw
-        # "sitePassword is not defined" and nothing on the page could be clicked.
+        # Declared *and* used: a page that references sitePassword without
+        # declaring it throws on load and nothing on it can be clicked.
         "password declared": "let sitePassword =" in out,
         "password sent": "password: sitePassword" in out,
         "gate handler": "async function unlock" in out,

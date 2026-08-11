@@ -278,13 +278,12 @@ const $ = (id) => document.getElementById(id);
 let PATIENTS = [], active = null, history = [], busy = false;
 
 /* ---------- session identity ----------
-   The session id keys the server-side memory store, so regenerating it on every
-   page load made memory look broken: reload, ask "what was my last question", and
-   the answer was "this conversation just started" while the store still held the
-   turns under the old key. It lives in sessionStorage instead, so a reload resumes
-   the same conversation and "New session" is the only thing that starts a new one.
-   sessionStorage rather than localStorage: a new tab should be a new session, which
-   is also what keeps patient scope isolated between tabs. */
+   The session id keys the server-side memory store, so it has to survive a reload:
+   a fresh id on every page load strands the stored turns under a key nothing will
+   look up again, and memory reads as empty. It lives in sessionStorage, so a reload
+   resumes the same conversation and "New session" is the only thing that starts a
+   new one. sessionStorage rather than localStorage: a new tab should be a new
+   session, which is also what keeps patient scope isolated between tabs. */
 const newSessionId = () => 'ui-' + Math.random().toString(36).slice(2, 10);
 let sessionId = sessionStorage.getItem('phn-session') || newSessionId();
 sessionStorage.setItem('phn-session', sessionId);
@@ -371,10 +370,10 @@ function restart(){
 }
 
 /* ---------- result slip rendering (signature) ----------
-   Driven by custom_outputs.tool_data, the tool's own structured result. Earlier
-   this scraped the answer text for "- 2016-11-12: 90.5 kg" lines, which only
-   worked when the model happened not to reformat them -- 3 of 16 answers. The
-   numbers now come from the computation, so the slip is deterministic. */
+   Driven by custom_outputs.tool_data, the tool's own structured result, so every
+   number comes from the computation rather than from parsing the prose answer.
+   That is what makes the slip deterministic: the model can reformat its text
+   freely without changing what the slip shows. */
 const fmt = (n) => {
   if(n === null || n === undefined || Number.isNaN(n)) return '';
   const a = Math.abs(n);
@@ -507,10 +506,10 @@ function inlineMd(text){
 
      The model writes them three ways and all three have to render: [Evidence 1],
      [Evidence 1, 2], and [Evidence 1, Evidence 2] — the last repeats the word, so
-     an earlier pattern of \[Evidence\s*([\d,\s]+)\] failed to match it and the raw
-     brackets appeared in the answer. Every number inside the brackets becomes its
-     own chip, and each chip is labelled, because a chip containing a bare "1" beside
-     ordinary prose reads as a stray digit rather than a reference. */
+     the pattern has to match everything up to the closing bracket rather than only
+     digits and commas. Every number inside the brackets becomes its own chip, and
+     each chip is labelled, because a chip containing a bare "1" beside ordinary
+     prose reads as a stray digit rather than a reference. */
   s = s.replace(/\[\s*Evidence[^\]]*\]/gi, (match) => {
     const numbers = match.match(/\d+/g);
     if(!numbers) return match;

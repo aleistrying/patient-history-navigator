@@ -27,10 +27,12 @@ What the layers are, and why they are separate:
 * this module         - node bodies, prompts, clients, MLflow spans, and the
                         ResponsesAgent contract Model Serving calls.
 
-Four spans are emitted per request -- `patient_history_request` (CHAIN),
-`tool_selection` (LLM), `focused_patient_record_tool` (TOOL) and
-`patient_scoped_ai_search` (RETRIEVER) -- and `scripts/check_graph.py` asserts all
-four offline, along with the six `retrieval.*` metrics.
+Three spans are emitted per request: `patient_history_request` (CHAIN),
+`tool_selection` (LLM), and then whichever path answered --
+`focused_patient_record_tool` (TOOL) or `patient_scoped_ai_search` (RETRIEVER).
+Which of the last two is absent is itself the signal for how the question was
+answered. `scripts/check_graph.py` asserts all four names across both paths
+offline, along with the six `retrieval.*` metrics.
 
 The application organizes synthetic records. It does not diagnose, prescribe, or
 interpret clinical significance.
@@ -39,8 +41,6 @@ interpret clinical significance.
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import asdict
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -59,7 +59,7 @@ from mlflow.types.responses import (
 )
 
 from session_memory import CatalogMemoryStore, SessionMemory
-from query_strategies import QueryBundle, QueryStrategyEngine
+from query_strategies import STRATEGIES, QueryStrategyEngine
 from vector_retrieval import AdvancedRetriever, SearchHit
 from sql_execution import DatabricksSQLExecutor
 from record_tools import PatientRecordTools, ToolResult
@@ -347,10 +347,6 @@ def _list_value(value: Any) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
-# Tool schemas offered to the model. patient_id is deliberately absent: it is
-# bound server-side from the request, so the model cannot widen or redirect the
-# patient scope. Descriptions carry the routing rules -- the model, not a keyword
-# table, decides which tool applies and extracts the arguments.
 # The eight tools the model may call, and the schemas it chooses from, both built
 # from patient_tools.py where one object per tool declares the callable and the
 # contract together.
@@ -381,10 +377,6 @@ TOOL_SELECTION_SYSTEM_PROMPT = (
     "did not ask for can silently return zero results.\n"
     "Never ask for a patient id; the system supplies it."
 )
-
-# Maps the model-facing tool names onto the internal execution keys.
-
-
 
 
 @mlflow.trace(name="tool_selection", span_type=SpanType.LLM)
@@ -439,41 +431,38 @@ def _route_tool(
         return None, {}
 
     explicit = str(custom.get("tool") or "").strip().lower()
+    # Every model-facing name is accepted, plus the internal keys and short forms a
+    # caller is likely to type. Spreading TOOL_NAME_TO_KEY keeps the eight canonical
+    # names in step with the tools themselves.
     aliases = {
+        **TOOL_NAME_TO_KEY,
         "timeline": "timeline",
         "build_timeline": "timeline",
-        "build_patient_timeline": "timeline",
         "compare": "compare_documents",
         "diff": "compare_documents",
         "compare_documents": "compare_documents",
         "lab_trend": "lab_trend",
-        "analyze_lab_trend": "lab_trend",
         "medication_changes": "medication_changes",
-        "detect_medication_changes": "medication_changes",
         "count": "count_documents",
         "count_documents": "count_documents",
-        "count_patient_documents": "count_documents",
         "patient": "set_active_patient",
         "set_patient": "set_active_patient",
-        "set_active_patient": "set_active_patient",
         "list": "list_documents",
         "list_documents": "list_documents",
-        "list_patient_documents": "list_documents",
         "read": "read_documents",
         "read_documents": "read_documents",
-        "read_patient_documents": "read_documents",
     }
-    # Pin the retrieval path explicitly. Needed because tool selection is now a
-    # model decision: without this, an evaluation row meant to exercise retrieval
-    # could be routed to a tool at runtime, produce no retriever span, and make
-    # RetrievalGroundedness unscorable for that row.
+    # Pin the retrieval path explicitly, so an evaluation row meant to exercise
+    # retrieval cannot be routed to a tool at runtime, produce no retriever span,
+    # and make RetrievalGroundedness unscorable for that row.
     if explicit in {"none", "no_tool", "retrieval", "search"}:
         return None, {}
     if explicit:
         if explicit not in aliases:
             raise ValueError(
-                "Unknown tool. Use timeline, compare_documents, lab_trend, "
-                "medication_changes, or count_documents."
+                "Unknown tool. Use one of: "
+                + ", ".join(sorted(set(aliases.values())))
+                + ", or 'none' to pin the retrieval path."
             )
         # Scripted callers pass the arguments themselves in custom_inputs.
         return aliases[explicit], dict(custom)
@@ -791,15 +780,8 @@ def _execute(request: ResponsesAgentRequest) -> tuple[str, dict[str, Any]]:
         metadata["standalone_question"] = query_bundle.standalone_question
         metadata["retrieval_queries"] = query_bundle.retrieval_queries
         metadata["query_strategy_outputs"] = query_bundle.strategy_outputs
-        implemented = {
-            "reformulation",
-            "decomposition",
-            "multi_query",
-            "hyde",
-            "hypothetical_questions",
-        }
         metadata["active_query_strategies"] = [
-            name for name in query_bundle.strategy_outputs if name in implemented
+            name for name in query_bundle.strategy_outputs if name in STRATEGIES
         ]
         metadata["query_strategy_errors"] = {
             name: value
