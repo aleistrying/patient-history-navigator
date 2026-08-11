@@ -70,7 +70,7 @@ the directory listing.
 | `serving_agent.py` | The MLflow `ResponsesAgent` that is served. Supplies the node bodies, the prompts, the clients and the trace spans. |
 | `patient_tools.py` | The eight tools as LangChain `StructuredTool`s — one object per tool declaring both the schema the model sees and the function that runs. |
 | `record_tools.py` | The record layer: the SQL and Python behind the eight operations. Every number in an answer is computed here. |
-| `vector_retrieval.py` | Databricks AI Search: patient-filtered probes, Reciprocal Rank Fusion (RRF — merges several ranked result lists by rank rather than by score), reranking. |
+| `vector_retrieval.py` | Databricks AI Search: patient-filtered probes, built-in hybrid search (semantic and keyword ranks fused by the index), Reciprocal Rank Fusion across probes (RRF — merges several ranked result lists by rank rather than by score), and an ANN + full-text fallback for a workspace that refuses hybrid. |
 | `query_strategies.py` | Query expansion — reformulation, decomposition, multi-query, HyDE, hypothetical questions. |
 | `session_memory.py` | Persistent per-user, per-session state in a Unity Catalog managed memory store. |
 | `sql_execution.py` | Statement execution against the SQL warehouse, with identifier validation and literal escaping. |
@@ -189,7 +189,7 @@ they can run on every edit:
 
 ```bash
 python3 scripts/check_tool_schemas.py  # the 8 generated tool schemas vs. a snapshot
-python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed  (26 checks)
+python3 scripts/check_graph.py         # the real graph, 4 dependencies stubbed  (28 checks)
 python3 scripts/check_dates.py         # normalise_date, the guard before SQL    (11 cases)
 ```
 
@@ -207,17 +207,19 @@ The rest need the deployed endpoint, and the last three also need a browser:
 ```bash
 python3 scripts/check_tools.py        # two cases per tool, plus one single-date case  (17)
 python3 scripts/check_behaviour.py    # real questions, model picks the tool    (31 cases)
-python3 scripts/check_renderer.py     # markdown + escaping, in a browser       (14 cases)
-python3 scripts/check_ui_queries.py   # the real page, driven in a browser      (24 questions)
+python3 scripts/check_renderer.py     # markdown + escaping, in a browser       (16 cases)
+python3 scripts/check_ui_queries.py   # the real page, driven in a browser      (27 questions)
 python3 vercel/verify_deployment.py   # the deployed page, clicked in a browser
 ```
 
 The last three need `pip install playwright && playwright install chromium`.
 
 `check_ui_queries.py` starts `ui/app.py` on port 8791, opens the page in Chromium and
-works through 24 questions one turn at a time. Per question it records which tool ran,
+works through 27 questions one turn at a time. Per question it records which tool ran,
 the answer's word count, whether a structured result slip and evidence rendered, and the
-elapsed seconds. Today's run: 24 questions, 0 errors, median 5.9 s, mean 127 words. It is
+elapsed seconds. `--patient all` repeats the 27 against every roster entry, so a full
+sweep is 135 questions. A recorded 24-question run returned 0 errors, median 5.9 s and
+mean 127 words. It is
 the suite that caught `ui/app.py` passing `http_timeout_seconds` to `WorkspaceClient`,
 which the current `databricks-sdk` rejects — that broke every question on a fresh install,
 and only loading the real page showed it.
