@@ -29,7 +29,7 @@ starts the endpoint warming while you read the roster.
 | `ui/` | The local web UI and its proxy. `python3 ui/app.py`, then open `http://127.0.0.1:8765`. |
 | `vercel/` | The same UI behind the public URL above, with a password gate and credentials in encrypted environment variables. Deploy from inside this directory. See `vercel/README.md`. |
 | `data-generator/` | The Synthea CCDA-to-PDF generator that produced the corpus. |
-| `docs/` | Architecture, implementation guide, validation report, changelog, demo runbook. |
+| `docs/` | The full technical reference (`docs/README.md`), implementation guide, validation report, changelog, demo runbook. |
 | `deliverables/` | The report, slide deck and study guide. |
 | `scripts/` | `ask.sh` for querying the deployed endpoint, two tracked MLflow experiments, five test suites, and the builders that generate the deliverables. |
 
@@ -90,9 +90,15 @@ One request is a compiled LangGraph `StateGraph` — a state machine whose nodes
 read and write named keys of one shared state dict. Eight nodes:
 
 ```text
-load_memory -> route -+-> run_tool -> explain_tool ----------+-> save_memory
-                      |                                      |
-                      +-> expand_queries -> retrieve -> generate_answer
+load_memory
+    |
+  route ---- tool -------> run_tool -> explain_tool ------------+
+    |                                                           |
+    +--------- no tool ---> expand_queries -> retrieve ->        |
+                                              generate_answer --+
+                                                                |
+                                                                v
+                                                          save_memory
 ```
 
 `route` is the only branch, and it is the model's decision: the model picks one tool
@@ -178,8 +184,8 @@ Two files in `deliverables/` are **frozen** and must not be regenerated:
 
 ## Checking it still works
 
-Two suites are offline. They need no workspace, no credentials and about a second,
-so they run on every edit:
+Two suites are offline. They need no workspace, no credentials and a few seconds, so
+they can run on every edit:
 
 ```bash
 python3 scripts/check_tool_schemas.py  # the 8 generated tool schemas vs. a snapshot
@@ -197,7 +203,7 @@ The rest need the deployed endpoint, and the last two also need a browser:
 
 ```bash
 python3 scripts/check_tools.py        # 8 tools, with arguments and bare        (17 cases)
-python3 scripts/check_behaviour.py    # real questions, model picks the tool    (27 cases)
+python3 scripts/check_behaviour.py    # real questions, model picks the tool    (31 cases)
 python3 scripts/check_renderer.py     # markdown + escaping, in a browser       (14 cases)
 python3 vercel/verify_deployment.py   # the deployed page, clicked in a browser
 ```

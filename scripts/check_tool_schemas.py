@@ -5,7 +5,7 @@ patient_tools.py, so one object defines both what the model may call and what
 actually runs and the two cannot drift apart.
 
 That makes the schema the model sees a *derived* artefact. Every description
-steers routing -- `check_behaviour.py` asserts which tool the model picks for 27
+steers routing -- `check_behaviour.py` asserts which tool the model picks for 31
 questions -- so an edit that alters a description, drops a parameter, or changes a
 required list changes routing, and the failure surfaces only in a live test that
 costs minutes and an endpoint to run.
