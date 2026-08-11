@@ -187,6 +187,9 @@ tool_explanation_prompt = PromptTemplate.from_template(
 
 Rules:
 - Treat the result as authoritative and answer the question directly from it.
+- When the result states a total, a count or a number of records, give that number
+  in the first sentence. An exact total is the reason this result exists, and a
+  list of items with no total does not answer "how many" or "what is on file".
 - Report the findings themselves: name each record, value, change and date the
   result contains, and carry the numbers over exactly as given.
 - Never summarise several findings into a phrase like "various values differ".

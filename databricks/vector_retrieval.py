@@ -50,6 +50,9 @@ class AdvancedRetriever:
         cache_config: dict[str, Any],
     ):
         self.config = config
+        # Read in three places (the span attribute and both branches of the
+        # reranker gate), so resolve the default once rather than repeating it.
+        self.use_reranker = bool(config.get("use_reranker", True))
         self.schema = config["schema"]
         self.index_name = config["vector_search_index"]
         self.embedding = DatabricksEmbeddings(
@@ -100,7 +103,16 @@ class AdvancedRetriever:
         is shared across concurrent requests and keeps no per-request state.
         """
         notes = diagnostics if diagnostics is not None else {}
-        notes["reranker_available"] = DatabricksReranker is not None
+        # Available *to this request*, not merely installed. Reranking needs the
+        # package helper and use_reranker together, and reporting the import alone
+        # put reranker_available=True on the span beside reranked_probes=0 whenever
+        # use_reranker was false -- which reads as a silent failure rather than the
+        # configured choice it is.
+        #
+        # Neither input can see the third requirement, a reranker model served in the
+        # workspace, so True still does not promise a reranked answer: a workspace
+        # that rejects the reranker shows up as hybrid_failures plus first_error.
+        notes["reranker_available"] = DatabricksReranker is not None and self.use_reranker
 
         cache_key = self._cache_key(queries, patient_id, document_types)
         cached = self.cache.get(cache_key)
@@ -226,13 +238,15 @@ class AdvancedRetriever:
         query_vector = self.embedding.embed_query(query)
 
         reranker = None
-        if bool(self.config.get("use_reranker", True)) and DatabricksReranker:
+        if self.use_reranker and DatabricksReranker:
             reranker = DatabricksReranker(
                 columns_to_rerank=[self.schema["chunk_text"], "document_type"]
             )
-        elif bool(self.config.get("use_reranker", True)):
+        elif self.use_reranker:
             # Configured on but unavailable in the installed package. Answers still
             # come back and look normal, just ranked less well, so record it.
+            # Gated on the config on purpose: under use_reranker false nothing was
+            # requested, so there is nothing to warn about and this stays silent.
             _tally(notes, "warnings", "reranker_requested_but_unavailable")
 
         notes["probes"] = int(notes.get("probes", 0)) + 1
