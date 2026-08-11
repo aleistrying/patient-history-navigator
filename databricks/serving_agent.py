@@ -351,19 +351,16 @@ def _list_value(value: Any) -> list[str] | None:
 # bound server-side from the request, so the model cannot widen or redirect the
 # patient scope. Descriptions carry the routing rules -- the model, not a keyword
 # table, decides which tool applies and extracts the arguments.
-# The eight tools the model may call, and the schemas it chooses from. Both are
-# built from patient_tools.py, where one object per tool declares the callable and
-# the contract together -- so a schema can no longer advertise an argument the
-# executor ignores, which is what the two hand-maintained lists here allowed.
+# The eight tools the model may call, and the schemas it chooses from, both built
+# from patient_tools.py where one object per tool declares the callable and the
+# contract together.
 #
-# patient_id is injected rather than declared: the model chooses the operation, the
-# application chooses the patient. That was previously a convention (keep the field
-# out of the JSON) and is now enforced by the type system in both directions.
+# patient_id is injected rather than declared, so the model chooses the operation
+# and the application chooses the patient.
 #
-# The schemas these replaced were tuned against observed routing failures, so
-# scripts/check_tool_schemas.py compares what is generated here against a snapshot
-# of the originals -- offline, in under a second, rather than as an unexplained
-# regression in a live routing test.
+# The descriptions in those schemas are the routing rules, so
+# scripts/check_tool_schemas.py pins what is generated here -- offline, in under a
+# second, instead of as a routing regression found by a live test.
 PATIENT_TOOLS = build_patient_tools(record_tools, tools_config)
 TOOL_SPECS: list[dict[str, Any]] = model_facing_specs(PATIENT_TOOLS)
 

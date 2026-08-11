@@ -1,34 +1,22 @@
 """The eight patient-record tools, as LangChain StructuredTools.
 
-Why these are StructuredTools rather than a hand-written dispatch table
-----------------------------------------------------------------------
-The model needs a schema to choose from, and the application needs a callable to
-run. Declaring both from one object removes the failure mode where they drift: a
-schema advertising an argument the executor ignores, or an executor expecting one
-the schema never offered.
+One object per tool declares both the schema the model chooses from and the
+callable that runs, so a schema cannot advertise an argument the executor ignores.
 
-The guardrail that made this non-obvious
-----------------------------------------
-`patient_id` must never be model-selectable. The model chooses the *operation*;
-the application chooses the *patient*. Previously that was enforced by keeping
-`patient_id` out of hand-written JSON schemas -- correct, but a convention: any
-future edit could reintroduce it, and nothing would fail loudly.
+`patient_id` is never model-selectable: the model chooses the *operation*, the
+application chooses the *patient*. `Annotated[str, InjectedToolArg]` enforces that
+in both directions -- LangChain excludes injected arguments from the schema sent to
+the model, so the model cannot see or set the field, and the field has no default,
+so `tool.invoke()` raises `ValidationError` if the application fails to bind it.
 
-`Annotated[str, InjectedToolArg]` makes it structural instead. LangChain excludes
-injected arguments from the schema sent to the model, so the model cannot see or
-set the field; and because it has no default, `tool.invoke()` raises
-`ValidationError` if the application forgets to bind it. The scope boundary is now
-enforced in both directions by the type system rather than by reviewer vigilance.
+Optional string arguments default to `""`, not `None`, to keep the generated schema
+a plain `{"type": "string"}`. `Optional[str]` renders as `anyOf: [string, null]`,
+a more complex contract to hand a model for no gain. Every consumer here treats
+empty as absent.
 
-Optional string arguments default to `""` rather than `None` on purpose. It keeps
-the generated schema a plain `{"type": "string"}`, matching the hand-tuned schemas
-these replaced -- `Optional[str]` renders as `anyOf: [string, null]`, a different
-contract to offer a model whose routing behaviour was tuned against the simpler
-one. Every consumer already treats empty as absent.
-
-Argument descriptions are load-bearing. Each one below was tuned against an
-observed routing failure, and the reason is recorded beside it; they are the
-routing rules, so edit them only with a test to hand.
+Argument descriptions are the routing rules -- they are how the model decides which
+tool applies and what to extract. `scripts/check_tool_schemas.py` pins them, so
+edit them with that test to hand.
 """
 
 from __future__ import annotations
@@ -151,15 +139,14 @@ class LabTrendArgs(BaseModel):
 class MedicationChangesArgs(BaseModel):
     """The only tool whose schema marks arguments required -- advisory, not enforced.
 
-    "What changed" is meaningless without two points to compare, and there is no
+    "What changed" is meaningless without two points to compare and there is no
     defensible default pair, so the model is told both dates are required.
 
-    Execution still tolerates their absence, and that asymmetry is deliberate. A
-    Pydantic field with no default makes `invoke` raise `ValidationError`, which
-    would surface to the user as a failed request; the tool instead returns a
-    sentence naming what is missing, which is an answer. Absent-argument handling
-    is the wrapper's job (see `medication_changes`), so the fields carry defaults
-    and the required list is re-asserted onto the emitted JSON schema below.
+    Execution still tolerates their absence. A field with no default makes `invoke`
+    raise `ValidationError`, which reaches the user as a failed request; the tool
+    instead returns a sentence naming what is missing, which is an answer. So the
+    fields carry defaults, `medication_changes` handles the empty case, and
+    `model_facing_specs` re-asserts the required list onto the emitted schema.
     """
 
     patient_id: _INJECTED_PATIENT = _PATIENT_FIELD
@@ -170,11 +157,9 @@ class MedicationChangesArgs(BaseModel):
         default="", description="The later of the two dates to compare."
     )
 
-    # The required list is re-asserted in `model_facing_specs` rather than here: a
-    # `__get_pydantic_json_schema__` override on this class never runs, because
-    # LangChain derives a *new* model for the model-facing schema (one with the
-    # injected arguments stripped) and that derived model carries none of this
-    # class's hooks.
+    # A `__get_pydantic_json_schema__` override here would not run: LangChain builds
+    # a separate model for the model-facing schema, with injected arguments stripped,
+    # and that derived model carries none of this class's hooks.
 
 
 class SetActivePatientArgs(BaseModel):
@@ -328,10 +313,9 @@ def model_facing_specs(tools: dict[str, StructuredTool]) -> list[dict[str, Any]]
     """The OpenAI-style schemas to hand to `bind_tools`.
 
     Generated from the tools themselves, so the contract offered and the code run
-    stay one object -- with the single documented exception of `REQUIRED_ARGUMENTS`.
-    `scripts/check_tool_schemas.py` compares the output of this function against a
-    snapshot of the hand-written schemas these replaced, so drift is caught offline
-    rather than as an unexplained routing regression in a live test.
+    stay one object -- with the single exception of `REQUIRED_ARGUMENTS`.
+    `scripts/check_tool_schemas.py` pins this function's output, so a routing
+    contract change is caught offline instead of as a live regression.
     """
     specs: list[dict[str, Any]] = []
     for key, tool in tools.items():
@@ -349,14 +333,13 @@ def build_patient_tools(
 ) -> dict[str, StructuredTool]:
     """Build the eight tools, closed over the record layer and its config.
 
-    Returned keyed by *internal key* rather than model-facing name, because the
-    graph, the trace attributes and pinned evaluation rows all address tools that
-    way. `KEY_TO_TOOL_NAME` maps back when the model-facing name is needed.
+    Keyed by *internal key* rather than model-facing name, because the graph, the
+    trace attributes and pinned evaluation rows all address tools that way.
+    `KEY_TO_TOOL_NAME` maps back when the model-facing name is needed.
 
-    Each wrapper owns the argument discipline for its own tool: date
-    normalisation, and the refusals for arguments that have no safe default.
-    Those refusals used to live in the caller, which meant a second call site
-    would not have inherited them.
+    Each wrapper owns the argument discipline for its own tool: date normalisation,
+    and the refusals for arguments that have no safe default. Keeping them here
+    means every call site inherits them.
     """
 
     def timeline(
@@ -503,14 +486,12 @@ def build_patient_tools(
         ids = _clean(document_ids)
         start = normalise_date(start_date)
         end = normalise_date(end_date, end_of_year=True)
-        # Reading needs to know *what* to read. The schema already tells the model
-        # not to use this tool for open content questions, and it does anyway --
-        # "what were this patient's genome sequencing results?" arrived here with no
-        # arguments at all, and the three most recent documents came back as a
-        # confident answer about something the records do not contain. A description
-        # is guidance; this is the guarantee. Asking which documents also answers the
-        # original question, because the available types are listed and the one the
-        # user asked about is visibly absent.
+        # Reading needs to know *what* to read. The model routes open content
+        # questions here despite the description telling it not to, and with no
+        # arguments this would return the three most recent documents as a confident
+        # answer about whatever was asked -- including record types the patient does
+        # not have. Listing the available types instead also answers the question,
+        # because the type asked about is visibly absent from the list.
         if not kind and not ids and not start and not end:
             return record_tools.available_document_types(
                 patient_id,
