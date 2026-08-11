@@ -1,0 +1,83 @@
+resources:
+  jobs:
+    patient_history_release:
+      name: ${bundle.target}-patient-history-rag-release
+      description: Seed a synthetic demo, create memory, ingest records, evaluate, register, and deploy Patient History Navigator.
+      max_concurrent_runs: 1
+      # 6h. Ingesting the 5-patient subset is ~1.5h of embedding calls at the
+      # conservative rate limits; the old 3h left too little headroom.
+      timeout_seconds: 21600
+
+      tasks:
+        - task_key: seed_demo_data
+          spark_python_task:
+            python_file: seed_demo_patient.py
+            parameters:
+              - --config-file
+              - ${workspace.file_path}/navigator_config.yaml
+          environment_key: default
+
+        - task_key: setup_memory
+          spark_python_task:
+            python_file: setup_memory_store.py
+            parameters:
+              - --config-file
+              - ${workspace.file_path}/navigator_config.yaml
+          environment_key: default
+
+        - task_key: preprocess
+          depends_on:
+            - task_key: seed_demo_data
+            - task_key: setup_memory
+          spark_python_task:
+            python_file: ingest_records.py
+            parameters:
+              - --config-file
+              - ${workspace.file_path}/navigator_config.yaml
+          environment_key: default
+
+        - task_key: release
+          max_retries: 0
+          depends_on:
+            - task_key: preprocess
+          spark_python_task:
+            python_file: release_pipeline.py
+            parameters:
+              - --model-name
+              - ${var.model_name}
+              - --endpoint-name
+              - ${var.endpoint_name}
+              - --experiment-name
+              - ${var.experiment_name}
+              - --workload-size
+              - ${var.workload_size}
+              - --agent-file
+              - ${workspace.file_path}/serving_agent.py
+              - --config-file
+              - ${workspace.file_path}/navigator_config.yaml
+              - --eval-file
+              - ${workspace.file_path}/evaluation_set.json
+              - --scale-to-zero
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            # ai_parse_document requires serverless environment version 3+.
+            environment_version: "4"
+            dependencies:
+              - "mlflow[databricks]>=3.1,<4"
+              - "databricks-sdk>=0.50,<1"
+              - "databricks-langchain>=0.5,<1"
+              - "databricks-ai-search>=0.60,<1"
+              - "langchain-core>=0.3,<1"
+              - "langchain-text-splitters>=0.3,<1"
+              - "langgraph>=1.0,<2"
+              - "pydantic>=2,<3"
+              - "pypdf>=5,<7"
+              - "pyyaml>=6,<7"
+              - "requests>=2.31,<3"
+
+      permissions:
+        - level: CAN_MANAGE_RUN
+          group_name: users

@@ -1,0 +1,89 @@
+[
+  {
+    "inputs": {
+      "question": "What Hemoglobin A1c values are recorded for this patient, and on what dates?",
+      "patient_id": "demo-patient",
+      "tool": "none",
+      "tool_inputs_json": "{}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "5.8",
+        "5.6",
+        "2025"
+      ]
+    }
+  },
+  {
+    "inputs": {
+      "question": "Build a chronological timeline of the synthetic patient's records from 2025 to 2025.",
+      "patient_id": "demo-patient",
+      "tool": "timeline",
+      "tool_inputs_json": "{\"start_date\": \"2025-01-01\", \"end_date\": \"2025-12-31\"}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "timeline",
+        "2025"
+      ]
+    }
+  },
+  {
+    "inputs": {
+      "question": "Calculate the recorded Hemoglobin A1c trend.",
+      "patient_id": "demo-patient",
+      "tool": "lab_trend",
+      "tool_inputs_json": "{\"test_name\": \"Hemoglobin A1c\", \"start_date\": \"2025-01-01\", \"end_date\": \"2025-12-31\"}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "5.8",
+        "5.6",
+        "change"
+      ]
+    }
+  },
+  {
+    "inputs": {
+      "question": "Compare the January and June synthetic imaging reports.",
+      "patient_id": "demo-patient",
+      "tool": "compare_documents",
+      "tool_inputs_json": "{\"document_id_a\": \"imaging-2025-01\", \"document_id_b\": \"imaging-2025-06\"}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "8 mm",
+        "6 mm",
+        "difference"
+      ]
+    }
+  },
+  {
+    "inputs": {
+      "question": "What laboratory results are recorded for this patient?",
+      "patient_id": "73b97ede-ebda-6de2-36c8-c7c6cc9ad9ff",
+      "tool": "none",
+      "tool_inputs_json": "{}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "Sodium",
+        "Potassium"
+      ]
+    }
+  },
+  {
+    "inputs": {
+      "question": "Build a chronological timeline of this patient's recorded events.",
+      "patient_id": "73b97ede-ebda-6de2-36c8-c7c6cc9ad9ff",
+      "tool": "timeline",
+      "tool_inputs_json": "{\"start_date\": \"2014-01-01\", \"end_date\": \"2026-12-31\"}"
+    },
+    "expectations": {
+      "expected_keywords": [
+        "timeline",
+        "2016"
+      ]
+    }
+  }
+]

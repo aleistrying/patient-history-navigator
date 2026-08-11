@@ -1,0 +1,203 @@
+[
+  {
+    "function": {
+      "description": "List the patient's recorded events in date order. Use for 'timeline', 'chronology', or 'what happened when'.",
+      "name": "build_patient_timeline",
+      "parameters": {
+        "properties": {
+          "document_types": {
+            "description": "Optional comma-separated document types to restrict to.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "ISO date. Omit unless the question names an end date or year.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "ISO date. Omit unless the question names a start date or year.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Show the textual differences between two of the patient's documents. Document ids are opaque hashes: never invent them. If the user names two dates, pass them as date_a and date_b \u2014 that is the normal case. Otherwise omit the ids and pass document_type, and the two most recent documents of that type will be compared. Only pass ids that appeared verbatim earlier in the conversation.",
+      "name": "compare_patient_documents",
+      "parameters": {
+        "properties": {
+          "date_a": {
+            "description": "The earlier date the user named, as YYYY-MM-DD. Use this whenever the user refers to documents by when they were recorded.",
+            "type": "string"
+          },
+          "date_b": {
+            "description": "The later date the user named, as YYYY-MM-DD.",
+            "type": "string"
+          },
+          "document_id_a": {
+            "description": "Only if a real id was given to you earlier.",
+            "type": "string"
+          },
+          "document_id_b": {
+            "description": "Only if a real id was given to you earlier.",
+            "type": "string"
+          },
+          "document_type": {
+            "description": "The kind of document to compare, e.g. encounter_note, laboratory_report, diagnostic_imaging_report. Use this instead of guessing ids, and alongside dates to narrow which document on each date is meant.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Compute how a recorded numeric measurement changed over time (a lab analyte or a vital sign). Use when the question asks about a trend, change, or progression of a measurement. Omit test_name to summarise every recorded measurement.",
+      "name": "analyze_lab_trend",
+      "parameters": {
+        "properties": {
+          "end_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          },
+          "test_name": {
+            "description": "One measurement name such as Hemoglobin, Body Weight, Heart rate. Omit for an overview of all measurements.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Compare the medications recorded at two dates and list what was added or removed. Use only when the question asks what medications changed, started, or stopped.",
+      "name": "detect_medication_changes",
+      "parameters": {
+        "properties": {
+          "earlier_date": {
+            "type": "string"
+          },
+          "later_date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "earlier_date",
+          "later_date"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Choose which patient the conversation is about, and remember it for later turns. Use when the user names a patient, asks to switch patient, or asks which patients are available. Accepts a patient id, an id prefix, an ON-SYN display id, or a person's name. Call it with no argument to list the patients on record.",
+      "name": "set_active_patient",
+      "parameters": {
+        "properties": {
+          "patient": {
+            "description": "Name, id, id prefix or ON-SYN display id. Omit to list the available patients.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "List every record the patient has: date, type, title and id. Use whenever the question asks what documents or records exist, or which documents are of some kind. Retrieval sees only a few documents and will under-report, so prefer this for any 'what documents' question.",
+      "name": "list_patient_documents",
+      "parameters": {
+        "properties": {
+          "document_type": {
+            "description": "Optional single type, e.g. diagnostic_imaging_report.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Return the verbatim text of up to five documents of ONE named kind. Use this only when the user names a specific document or document type to read, such as 'read the discharge summary', 'what do the specialist notes say', or 'show me the encounter notes'. Do NOT use it for open questions about what the records contain, show, or mean -- including summaries, findings, results and any clinical-content question. Those are answered from retrieved evidence with no tool call.",
+      "name": "read_patient_documents",
+      "parameters": {
+        "properties": {
+          "document_ids": {
+            "description": "Comma-separated real ids. Never invent these.",
+            "type": "string"
+          },
+          "document_type": {
+            "description": "e.g. encounter_note, specialist_note, discharge_summary, diagnostic_imaging_report.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Omit unless the question names a period.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Return an exact COUNT of records, broken down by type. Use ONLY for questions asking how many, how much, or the number of records. Never use it to describe, list, or summarise what the records contain: a question like 'what laboratory results are recorded' wants the contents, not a count.",
+      "name": "count_patient_documents",
+      "parameters": {
+        "properties": {
+          "document_type": {
+            "description": "ONE record type, only when the user names it. Omit it for any general count, including 'how many records', 'how many of each' or 'per category' -- omitting returns the full breakdown by type. Never guess a type the user did not say.",
+            "type": "string"
+          },
+          "end_date": {
+            "description": "Omit unless the user names a period. Omitting counts all time.",
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Omit unless the user names a period. Omitting counts all time.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  }
+]

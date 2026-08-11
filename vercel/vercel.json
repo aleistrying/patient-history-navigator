@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/ask.py": { "maxDuration": 300 },
+    "api/patients.py": { "maxDuration": 30 },
+    "api/warm.py": { "maxDuration": 60 }
+  },
+  "rewrites": [{ "source": "/", "destination": "/index.html" }]
+}

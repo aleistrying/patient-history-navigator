@@ -1,0 +1,14 @@
+# Databricks Apps entry point.
+#
+# Apps injects DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET for the app's own
+# service principal, and databricks-sdk picks them up with no code changes -- the
+# same app.py that runs locally against your CLI credentials.
+#
+# Before the app can answer, grant its service principal CAN QUERY on the serving
+# endpoint (Apps home -> Edit -> Configure -> App resources). Without that grant
+# every question returns a permission error.
+command: ["python", "app.py"]
+
+env:
+  - name: PHN_ENDPOINT
+    value: "dbdemos-rag-prod"

@@ -1,0 +1,31 @@
+# Generated and downloaded data. Everything here is reproducible: the corpus also
+# lives in the Unity Catalog Volume the ingestion job reads from, and the Synthea
+# archive is an external download. Committing ~700MB would make the repository
+# unusable for the code it exists to hold.
+data-generator/data/
+
+# Local environments and caches
+.venv/
+__pycache__/
+*.pyc
+
+# LibreOffice lock files
+.~lock.*#
+
+# Vercel project link (contains project and org ids)
+.vercel/
+
+# Databricks bundle deployment state, written by the CLI per target.
+databricks/.databricks/
+
+# Built documents. The repository holds the code that produces them; the .docx and
+# .pptx are outputs, and committing binaries that change on every rebuild makes
+# diffs unreadable.
+deliverables/
+
+# Prose. Tracked separately from the code it describes.
+docs/
+
+# Local MLflow trace store used by scripts/check_graph.py when run ad hoc.
+mlflow.db
+mlruns/

@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient History Navigator</title>
+<style>
+  /* Theme: "Requisition" — see THEME.md */
+  :root{
+    --paper:#F6F8F9; --surface:#FFFFFF; --ink:#16262F; --slate:#64808E;
+    --rule:#DCE4E8; --specimen:#0F766E; --flag-high:#A85B00; --flag-low:#1D5FA8;
+    --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+    --ui: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --radius:3px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink); font-family:var(--ui);
+    font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  .field{
+    font-family:var(--mono); font-size:11px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--slate);
+  }
+  .num{font-family:var(--mono); font-variant-numeric:tabular-nums}
+  button{font-family:inherit; font-size:inherit; cursor:pointer}
+  :focus-visible{outline:2px solid var(--specimen); outline-offset:2px}
+
+  /* ---------- Step 1: selection ---------- */
+  .select-view{max-width:1000px; margin:0 auto; padding:56px 24px 80px}
+  .masthead{border-bottom:1px solid var(--rule); padding-bottom:20px; margin-bottom:32px}
+  .masthead h1{
+    margin:0 0 6px; font-size:26px; font-weight:600; letter-spacing:-.015em;
+  }
+  .masthead p{margin:0; color:var(--slate); max-width:56ch}
+  .roster{
+    display:grid; gap:14px; margin:0; padding:0; list-style:none;
+    grid-template-columns:repeat(auto-fill,minmax(292px,1fr));
+  }
+  .record{
+    width:100%; text-align:left; background:var(--surface); color:inherit;
+    border:1px solid var(--rule); border-left:3px solid var(--rule);
+    border-radius:var(--radius); padding:16px 18px 14px;
+    transition:border-color .12s, transform .12s, box-shadow .12s;
+  }
+  .record:hover{border-left-color:var(--specimen); transform:translateY(-1px);
+    box-shadow:0 2px 10px rgba(22,38,47,.06)}
+  .record .specimen{font-family:var(--mono); font-size:12.5px; color:var(--specimen);
+    letter-spacing:.02em}
+  .record h2{margin:6px 0 2px; font-size:17px; font-weight:600}
+  .record .bio{color:var(--slate); font-size:13px; margin-bottom:12px}
+  .record dl{display:flex; gap:20px; margin:0 0 10px; padding-top:11px;
+    border-top:1px solid var(--rule)}
+  .record dt{display:block}
+  .record dd{margin:2px 0 0; font-family:var(--mono); font-size:14px;
+    font-variant-numeric:tabular-nums}
+  .record .note{margin:0; font-size:12.5px; color:var(--slate)}
+  .stamp{
+    margin-top:36px; padding-top:14px; border-top:1px solid var(--rule);
+    max-width:64ch;
+  }
+
+  /* ---------- Step 2: conversation ---------- */
+  .chat-view{display:flex; flex-direction:column; min-height:100vh}
+  .strip{
+    position:sticky; top:0; z-index:5; background:var(--surface);
+    border-bottom:1px solid var(--rule);
+  }
+  .strip-inner{
+    max-width:800px; margin:0 auto; padding:11px 24px;
+    display:flex; align-items:center; gap:18px;
+  }
+  .strip .who{min-width:0; flex:1}
+  .strip .specimen{font-family:var(--mono); font-size:13px; color:var(--specimen)}
+  .strip .name{font-weight:600; font-size:14px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis}
+  .strip .meta{white-space:nowrap}
+  .restart{
+    background:none; border:1px solid var(--rule); border-radius:var(--radius);
+    padding:6px 12px; color:var(--slate); font-size:13px; white-space:nowrap;
+  }
+  .restart:hover{border-color:var(--specimen); color:var(--specimen)}
+
+  .thread{flex:1; max-width:800px; width:100%; margin:0 auto; padding:26px 24px 8px}
+  .turn{margin-bottom:26px}
+  .turn.enter{animation:rise .12s ease-out}
+  @keyframes rise{from{opacity:0; transform:translateY(3px)} to{opacity:1; transform:none}}
+  .turn .who-label{margin-bottom:5px}
+  .ask{
+    background:var(--surface); border:1px solid var(--rule);
+    border-left:3px solid var(--ink); border-radius:var(--radius);
+    padding:11px 14px;
+  }
+  /* Rendered markdown. Tight vertical rhythm so an answer reads as one block of
+     record commentary rather than a stack of loose paragraphs. */
+  .reply.md > :first-child{margin-top:0}
+  .reply.md > :last-child{margin-bottom:0}
+  .reply.md p{margin:0 0 .7em}
+  .reply.md h3,.reply.md h4,.reply.md h5{
+    margin:1.15em 0 .4em; font-size:14px; font-weight:600; letter-spacing:.01em;
+  }
+  .reply.md h3{
+    font-family:var(--mono); font-size:11.5px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--slate); font-weight:400;
+  }
+  .reply.md strong{font-weight:600; color:var(--ink)}
+  .reply.md ul,.reply.md ol{margin:.2em 0 .8em; padding-left:1.15em}
+  .reply.md li{margin:.22em 0}
+  .reply.md ul{list-style:none; padding-left:0}
+  .reply.md ul > li{padding-left:1.1em; position:relative}
+  .reply.md ul > li::before{
+    content:"–"; position:absolute; left:.15em; color:var(--slate);
+  }
+  .reply.md ol{list-style:decimal}
+  .reply.md ol > li::marker{font-family:var(--mono); font-size:.85em; color:var(--slate)}
+  .reply.md code{
+    font-family:var(--mono); font-size:.88em; background:#F1F5F6;
+    border:1px solid var(--rule); border-radius:2px; padding:0 4px;
+    font-variant-numeric:tabular-nums;
+  }
+  .reply.md pre{
+    margin:.5em 0 .9em; padding:11px 13px; background:#FBFCFD;
+    border:1px solid var(--rule); border-radius:var(--radius); overflow-x:auto;
+  }
+  .reply.md pre code{background:none; border:0; padding:0; font-size:12.5px}
+  .reply.md hr{border:0; border-top:1px solid var(--rule); margin:1em 0}
+  .reply em.cite{
+    font-style:normal; font-family:var(--mono); font-size:.78em;
+    letter-spacing:.02em; white-space:nowrap;
+    color:var(--specimen); background:#EAF3F2; padding:1px 5px; border-radius:2px;
+    /* Lifted slightly and spaced, so a run of chips reads as references attached
+       to the sentence rather than as numbers inside it. */
+    vertical-align:.12em; margin:0 1px;
+  }
+  .reply em.cite + em.cite{ margin-left:2px; }
+
+  /* signature: result slip */
+  .slip{
+    background:var(--surface); border:1px solid var(--rule);
+    border-radius:var(--radius); margin:14px 0 0; overflow:hidden;
+  }
+  .slip-head{
+    display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+    padding:9px 14px; border-bottom:1px solid var(--rule); background:#FBFCFD;
+  }
+  .slip table{width:100%; border-collapse:collapse}
+  .slip td{padding:7px 14px; border-bottom:1px solid var(--rule); font-size:13.5px}
+  .slip tr:last-child td{border-bottom:0}
+  .slip td.v{text-align:right; font-family:var(--mono);
+    font-variant-numeric:tabular-nums; white-space:nowrap}
+  .slip td.u{font-family:var(--mono); font-size:12px; color:var(--slate); width:1%;
+    white-space:nowrap}
+  .spark{display:block; padding:12px 14px 4px}
+  .spark-foot{display:flex; justify-content:space-between; padding:0 14px 11px}
+
+  details.evidence{margin-top:12px}
+  details.evidence summary{
+    cursor:pointer; color:var(--slate); font-family:var(--mono); font-size:11.5px;
+    text-transform:uppercase; letter-spacing:.08em; list-style:none;
+  }
+  details.evidence summary::-webkit-details-marker{display:none}
+  details.evidence summary::before{content:"▸ "; color:var(--rule)}
+  details.evidence[open] summary::before{content:"▾ "}
+  details.evidence ol{margin:10px 0 0; padding:0 0 0 4px; list-style:none}
+  details.evidence li{
+    display:flex; gap:10px; padding:5px 0; border-top:1px solid var(--rule);
+    font-size:12.5px;
+  }
+  details.evidence .idx{font-family:var(--mono); color:var(--specimen); width:2.2em;
+    flex:none}
+  details.evidence .doc{font-family:var(--mono); color:var(--slate); word-break:break-all}
+
+  .notice{
+    border:1px solid var(--rule); border-left:3px solid var(--flag-high);
+    background:var(--surface); border-radius:var(--radius); padding:11px 14px;
+    font-size:13.5px;
+  }
+  .working{color:var(--slate); display:flex; align-items:center; gap:9px}
+  .working .dot{
+    width:6px; height:6px; border-radius:50%; background:var(--specimen);
+    animation:pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:.25} 50%{opacity:1}}
+
+  .composer{
+    position:sticky; bottom:0; background:var(--paper);
+    border-top:1px solid var(--rule); padding:14px 24px 20px;
+  }
+  .composer-inner{max-width:800px; margin:0 auto}
+  .openers{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:11px}
+  .opener{
+    background:var(--surface); border:1px solid var(--rule);
+    border-radius:var(--radius); padding:6px 11px; font-size:13px; color:var(--slate);
+  }
+  .opener:hover{border-color:var(--specimen); color:var(--specimen)}
+  .entry{display:flex; gap:10px; align-items:flex-end}
+  textarea{
+    flex:1; resize:none; font-family:inherit; font-size:15px; line-height:1.5;
+    color:var(--ink); background:var(--surface); border:1px solid var(--rule);
+    border-radius:var(--radius); padding:11px 13px; max-height:180px;
+  }
+  textarea:focus{border-color:var(--specimen); outline:none}
+  .send{
+    background:var(--specimen); color:#fff; border:1px solid var(--specimen);
+    border-radius:var(--radius); padding:11px 20px; font-weight:500;
+  }
+  .send:disabled{background:var(--rule); border-color:var(--rule); color:var(--slate);
+    cursor:not-allowed}
+  .composer .stamp-line{margin-top:9px}
+
+  [hidden]{display:none !important}
+  @media (max-width:560px){
+    .select-view{padding:32px 16px 60px}
+    .strip-inner,.thread,.composer{padding-left:16px; padding-right:16px}
+    .strip .meta{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none !important; transition:none !important}
+  }
+</style>
+</head>
+<body>
+
+<!-- PASSWORD GATE (Vercel deployment only) -->
+<main class="select-view" id="gateView">
+  <header class="masthead">
+    <h1>Patient History Navigator</h1>
+    <p>This demonstration is password protected. Enter the password you were given
+       to open a synthetic patient record.</p>
+  </header>
+  <div style="max-width:380px">
+    <p class="field" style="margin:0 0 8px">Password</p>
+    <div class="entry">
+      <input id="gatePass" type="password" autocomplete="current-password"
+             style="flex:1;font-family:inherit;font-size:15px;color:var(--ink);
+                    background:var(--surface);border:1px solid var(--rule);
+                    border-radius:var(--radius);padding:11px 13px">
+      <button class="send" id="gateBtn">Open</button>
+    </div>
+    <p class="note" id="gateMsg" style="margin-top:10px;color:var(--flag-high)"></p>
+  </div>
+  <p class="stamp field">Synthetic demonstration data — not for clinical use</p>
+</main>
+
+<!-- STEP 1 -->
+<main class="select-view" id="selectView" hidden>
+  <header class="masthead">
+    <h1>Patient History Navigator</h1>
+    <p>Open a synthetic patient record, then ask about it in plain language. The
+       assistant reads only that record and cites the documents it used.</p>
+  </header>
+  <div id="warmBar" style="display:flex;align-items:center;gap:12px;
+       border:1px solid var(--rule);border-left:3px solid var(--rule);
+       background:var(--surface);border-radius:var(--radius);
+       padding:10px 14px;margin:0 0 22px">
+    <span class="field" id="warmLabel">Endpoint may be asleep</span>
+    <span class="field" id="warmDetail" style="flex:1;color:var(--slate)">
+      It scales to zero when idle, so the first question can take about a minute.</span>
+    <button class="restart" id="warmBtn">Wake it now</button>
+  </div>
+
+  <p class="field" style="margin:0 0 12px">Select a record</p>
+  <ul class="roster" id="roster"></ul>
+  <p class="stamp field" id="selectStamp">Synthetic demonstration data — not for clinical use</p>
+</main>
+
+<!-- STEP 2 -->
+<div class="chat-view" id="chatView" hidden>
+  <div class="strip">
+    <div class="strip-inner">
+      <div class="who">
+        <div class="specimen num" id="stripSpecimen"></div>
+        <div class="name" id="stripName"></div>
+      </div>
+      <div class="meta field" id="stripMeta"></div>
+      <button class="restart" id="restart">New session</button>
+    </div>
+  </div>
+
+  <div class="thread" id="thread"></div>
+
+  <div class="composer">
+    <div class="composer-inner">
+      <div class="openers" id="openers"></div>
+      <div class="entry">
+        <textarea id="entry" rows="1" placeholder="Ask about this record…"
+                  aria-label="Ask about this record"></textarea>
+        <button class="send" id="send">Ask</button>
+      </div>
+      <p class="stamp-line field">Synthetic demonstration data — not for clinical use</p>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+let sitePassword = sessionStorage.getItem('phn-pass') || '';
+let PATIENTS = [], active = null, history = [], busy = false;
+
+/* ---------- session identity ----------
+   The session id keys the server-side memory store, so regenerating it on every
+   page load made memory look broken: reload, ask "what was my last question", and
+   the answer was "this conversation just started" while the store still held the
+   turns under the old key. It lives in sessionStorage instead, so a reload resumes
+   the same conversation and "New session" is the only thing that starts a new one.
+   sessionStorage rather than localStorage: a new tab should be a new session, which
+   is also what keeps patient scope isolated between tabs. */
+const newSessionId = () => 'ui-' + Math.random().toString(36).slice(2, 10);
+let sessionId = sessionStorage.getItem('phn-session') || newSessionId();
+sessionStorage.setItem('phn-session', sessionId);
+
+function rotateSession(){
+  sessionId = newSessionId();
+  sessionStorage.setItem('phn-session', sessionId);
+  sessionStorage.removeItem('phn-patient');
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------- step 1 ---------- */
+async function boot(){
+  try{
+    const res = await fetch('/api/patients');
+    const data = await res.json();
+    PATIENTS = data.patients || [];
+  }catch{
+    $('roster').innerHTML =
+      '<li class="notice">Cannot reach the local server. Start it with ' +
+      '<span class="num">python3 ui/app.py</span> and reload.</li>';
+    return;
+  }
+  $('roster').innerHTML = PATIENTS.map((p, i) => `
+    <li>
+      <button class="record" data-i="${i}">
+        <div class="specimen">${esc(p.specimen)}</div>
+        <h2>${esc(p.name)}</h2>
+        <div class="bio">${esc(p.sex)} · born ${esc(p.born)}</div>
+        <dl>
+          <div><dt class="field">Documents</dt><dd>${p.documents}</dd></div>
+          <div><dt class="field">Measurements</dt><dd>${p.measurements}</dd></div>
+          <div><dt class="field">Record span</dt><dd>${esc(p.span)}</dd></div>
+        </dl>
+        <p class="note">${esc(p.note)}</p>
+      </button>
+    </li>`).join('');
+  $('roster').querySelectorAll('.record').forEach((b) =>
+    b.addEventListener('click', () => open(PATIENTS[+b.dataset.i])));
+
+  // Resume the record that was open before a reload. The session id is unchanged,
+  // so the server still has this conversation's memory; passing resuming keeps it
+  // that way instead of rotating to a fresh session.
+  const resumed = PATIENTS.find((p) => p.id === sessionStorage.getItem('phn-patient'));
+  if(resumed){
+    open(resumed, true);
+    $('thread').innerHTML =
+      `<div class="turn"><p class="field who-label">Record reopened</p>
+         <div class="notice">Back in ${esc(resumed.name)}'s record, same session — the
+         assistant still has the earlier turns. <em>New session</em> clears them.</div>
+       </div>`;
+  }
+}
+
+function open(p, resuming){
+  active = p;
+  if(!resuming){ history = []; rotateSession(); }
+  // Remembered so a reload lands back in the open record rather than the picker.
+  sessionStorage.setItem('phn-patient', p.id);
+  $('stripSpecimen').textContent = p.specimen;
+  $('stripName').textContent = p.name;
+  $('stripMeta').textContent = `${p.documents} documents · ${p.span}`;
+  $('openers').innerHTML = (p.openers || []).map((o) =>
+    `<button class="opener" data-q="${esc(o.text)}">${esc(o.label)}</button>`).join('');
+  $('openers').querySelectorAll('.opener').forEach((b) =>
+    b.addEventListener('click', () => { $('entry').value = b.dataset.q; ask(); }));
+  $('thread').innerHTML =
+    `<div class="turn"><p class="field who-label">Record open</p>
+       <div class="notice">Ask anything about ${esc(p.name)}'s records. The assistant
+       runs a timeline, comparison, trend or medication tool by itself when the
+       question calls for one.</div></div>`;
+  $('selectView').hidden = true; $('chatView').hidden = false;
+  $('entry').focus();
+}
+
+function restart(){
+  active = null; history = [];
+  rotateSession();
+  $('chatView').hidden = true; $('selectView').hidden = false;
+  $('entry').value = '';
+  window.scrollTo({ top: 0 });
+}
+
+/* ---------- result slip rendering (signature) ----------
+   Driven by custom_outputs.tool_data, the tool's own structured result. Earlier
+   this scraped the answer text for "- 2016-11-12: 90.5 kg" lines, which only
+   worked when the model happened not to reformat them -- 3 of 16 answers. The
+   numbers now come from the computation, so the slip is deterministic. */
+const fmt = (n) => {
+  if(n === null || n === undefined || Number.isNaN(n)) return '';
+  const a = Math.abs(n);
+  return (a >= 100 ? n.toFixed(1) : a >= 1 ? n.toFixed(2) : n.toFixed(3))
+    .replace(/\.?0+$/, '');
+};
+function sparkline(pts){
+  const W = 560, H = 46, pad = 3;
+  const vals = pts.map((p) => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals), range = (hi - lo) || 1;
+  const x = (i) => pad + i * ((W - pad * 2) / Math.max(1, pts.length - 1));
+  const y = (v) => H - pad - ((v - lo) / range) * (H - pad * 2);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
+  const dots = pts.map((p, i) =>
+    `<circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.5" fill="#0F766E"/>`).join('');
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
+            role="img" aria-label="Trend of ${pts.length} recorded values">
+            <path d="${line}" fill="none" stroke="#0F766E" stroke-width="1.5"/>${dots}</svg>`;
+}
+/* One measurement over time: sparkline plus the value column. */
+function trendSlip(d){
+  const pts = (d.points || []).filter((p) => typeof p.value === 'number');
+  if(pts.length < 2) return '';
+  const unit = d.unit || pts.find((p) => p.unit)?.unit || '';
+  const rows = pts.map((p) =>
+    `<tr><td class="num" style="color:var(--slate)">${esc(p.date)}</td>
+         <td class="v">${fmt(p.value)}</td>
+         <td class="u">${esc(p.unit || unit)}</td></tr>`).join('');
+  const pct = (d.percent === null || d.percent === undefined) ? ''
+    : ` · ${d.percent > 0 ? '+' : ''}${d.percent.toFixed(1)}%`;
+  return `<div class="slip">
+      <div class="slip-head">
+        <span class="field">${esc(d.measurement || 'Recorded values')}</span>
+        <span class="field">${pts.length} points${esc(pct)}</span></div>
+      ${sparkline(pts)}
+      <div class="spark-foot">
+        <span class="field">${esc(pts[0].date)} · ${fmt(pts[0].value)} ${esc(unit)}</span>
+        <span class="field">range ${fmt(d.low)}–${fmt(d.high)} ${esc(unit)}</span>
+        <span class="field">${esc(pts[pts.length-1].date)} · ${fmt(pts[pts.length-1].value)} ${esc(unit)}</span></div>
+      <table><tbody>${rows}</tbody></table></div>`;
+}
+
+/* Many measurements at once: one row each, first -> last with the change. */
+function overviewSlip(d){
+  const series = (d.series || []).filter((s) => typeof s.first === 'number');
+  if(!series.length) return '';
+  const rows = series.map((s) => {
+    const pct = (s.percent === null || s.percent === undefined) ? ''
+      : `${s.percent > 0 ? '+' : ''}${s.percent.toFixed(1)}%`;
+    const dir = s.delta > 0 ? 'var(--flag-high)' : s.delta < 0 ? 'var(--flag-low)' : 'var(--slate)';
+    return `<tr>
+      <td>${esc(s.measurement)}</td>
+      <td class="v">${fmt(s.first)} → ${fmt(s.last)}</td>
+      <td class="u">${esc(s.unit || '')}</td>
+      <td class="v" style="color:${dir}">${esc(pct)}</td>
+      <td class="u">${s.count} pts</td></tr>`;
+  }).join('');
+  return `<div class="slip">
+      <div class="slip-head"><span class="field">Recorded measurements</span>
+        <span class="field">${series.length}${d.total > series.length ? ' of ' + d.total : ''}</span></div>
+      <table><tbody>${rows}</tbody></table></div>`;
+}
+
+/* Record census: exact counts by type. */
+function countsSlip(d){
+  const rows = (d.by_type || []).map((t) =>
+    `<tr><td>${esc(String(t.document_type || '').replace(/_/g, ' '))}</td>
+         <td class="v">${t.records}</td>
+         <td class="u">${esc(t.earliest || '')}${t.latest && t.latest !== t.earliest ? ' – ' + esc(t.latest) : ''}</td>
+     </tr>`).join('');
+  if(!rows) return '';
+  return `<div class="slip">
+      <div class="slip-head"><span class="field">Records on file</span>
+        <span class="field">${d.total} total</span></div>
+      <table><tbody>${rows}</tbody></table></div>`;
+}
+
+/* Document inventory: the full list, which the prose answer only summarises. */
+function documentListSlip(d){
+  const docs = d.documents || [];
+  if(!docs.length) return '';
+  const shown = docs.slice(0, 60);
+  const rows = shown.map((doc) =>
+    `<tr><td class="num" style="color:var(--slate);white-space:nowrap">${esc(doc.document_date)}</td>
+         <td class="u" style="white-space:nowrap">${esc(String(doc.document_type||'').replace(/_/g,' '))}</td>
+         <td>${esc(doc.title || '')}</td></tr>`).join('');
+  return `<div class="slip">
+      <div class="slip-head"><span class="field">Records on file</span>
+        <span class="field">${d.total}${docs.length > shown.length ? ' · showing ' + shown.length : ''}</span></div>
+      <table><tbody>${rows}</tbody></table></div>`;
+}
+
+/* Which documents were read verbatim, so the answer is auditable. */
+function documentsSlip(d){
+  const docs = d.documents || [];
+  if(!docs.length) return '';
+  const rows = docs.map((doc) =>
+    `<tr><td class="num" style="color:var(--slate);white-space:nowrap">${esc(doc.document_date)}</td>
+         <td class="u" style="white-space:nowrap">${esc(String(doc.document_type||'').replace(/_/g,' '))}</td>
+         <td>${esc(doc.title || '')}</td>
+         <td class="v">${doc.characters ? doc.characters.toLocaleString() : ''}</td>
+         <td class="u">chars</td></tr>`).join('');
+  return `<div class="slip">
+      <div class="slip-head"><span class="field">Documents read in full</span>
+        <span class="field">${d.total}</span></div>
+      <table><tbody>${rows}</tbody></table></div>`;
+}
+
+function slipFor(toolData){
+  if(!toolData || typeof toolData !== 'object') return '';
+  if(toolData.kind === 'trend')          return trendSlip(toolData);
+  if(toolData.kind === 'trend_overview') return overviewSlip(toolData);
+  if(toolData.kind === 'counts')         return countsSlip(toolData);
+  if(toolData.kind === 'document_list')  return documentListSlip(toolData);
+  if(toolData.kind === 'documents')      return documentsSlip(toolData);
+  return '';
+}
+/* ---------- markdown ----------
+   The model replies in markdown, so render it. Deliberately small and
+   self-contained: no library, and everything is HTML-escaped before any tag is
+   introduced, so model output can never inject markup. */
+function inlineMd(text){
+  let s = esc(text);
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');            // `code`
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');   // **bold**
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g,   // *italic*
+                '$1<em>$2</em>');
+  s = s.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+  /* Evidence citations stay a first-class element, not generic emphasis.
+
+     The model writes them three ways and all three have to render: [Evidence 1],
+     [Evidence 1, 2], and [Evidence 1, Evidence 2] — the last repeats the word, so
+     an earlier pattern of \[Evidence\s*([\d,\s]+)\] failed to match it and the raw
+     brackets appeared in the answer. Every number inside the brackets becomes its
+     own chip, and each chip is labelled, because a chip containing a bare "1" beside
+     ordinary prose reads as a stray digit rather than a reference. */
+  s = s.replace(/\[\s*Evidence[^\]]*\]/gi, (match) => {
+    const numbers = match.match(/\d+/g);
+    if(!numbers) return match;
+    return numbers.map((n) => `<em class="cite">Ev ${n}</em>`).join('');
+  });
+  return s;
+}
+
+function renderMarkdown(src){
+  const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let para = [], list = null, fence = null;
+
+  const flushPara = () => {
+    if(para.length){ out.push(`<p>${inlineMd(para.join(' '))}</p>`); para = []; }
+  };
+  const flushList = () => {
+    if(list){ out.push(`</${list}>`); list = null; }
+  };
+  const openList = (tag) => {
+    if(list !== tag){ flushList(); out.push(`<${tag}>`); list = tag; }
+  };
+
+  for(const raw of lines){
+    const line = raw.replace(/\s+$/, '');
+
+    if(/^\s*```/.test(line)){                     // fenced code
+      if(fence === null){ flushPara(); flushList(); fence = []; }
+      else { out.push(`<pre><code>${esc(fence.join('\n'))}</code></pre>`); fence = null; }
+      continue;
+    }
+    if(fence !== null){ fence.push(raw); continue; }
+
+    if(!line.trim()){ flushPara(); flushList(); continue; }
+
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if(heading){
+      flushPara(); flushList();
+      const level = Math.min(heading[1].length + 2, 5);   // h1 -> h3, keeps page hierarchy
+      out.push(`<h${level}>${inlineMd(heading[2])}</h${level}>`);
+      continue;
+    }
+    if(/^\s*([-*_])\s*\1\s*\1[\s-*_]*$/.test(line)){       // thematic break
+      flushPara(); flushList(); out.push('<hr>'); continue;
+    }
+    const bullet = line.match(/^\s*[-*+•]\s+(.*)$/);
+    if(bullet){
+      flushPara(); openList('ul');
+      out.push(`<li>${inlineMd(bullet[1])}</li>`);
+      continue;
+    }
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if(numbered){
+      flushPara(); openList('ol');
+      out.push(`<li>${inlineMd(numbered[1])}</li>`);
+      continue;
+    }
+    if(list){                                    // continuation of a list item
+      out[out.length - 1] = out[out.length - 1].replace(
+        /<\/li>$/, ' ' + inlineMd(line.trim()) + '</li>');
+      continue;
+    }
+    para.push(line.trim());
+  }
+  if(fence !== null) out.push(`<pre><code>${esc(fence.join('\n'))}</code></pre>`);
+  flushPara(); flushList();
+  return out.join('\n');
+}
+
+/* ---------- conversation ---------- */
+function addTurn(html, cls){
+  const el = document.createElement('div');
+  el.className = 'turn enter' + (cls ? ' ' + cls : '');
+  el.innerHTML = html;
+  $('thread').appendChild(el);
+  el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  return el;
+}
+
+async function ask(){
+  const question = $('entry').value.trim();
+  if(!question || busy || !active) return;
+  busy = true; $('send').disabled = true; $('entry').value = '';
+
+  addTurn(`<p class="field who-label">You</p><div class="ask">${esc(question)}</div>`);
+  history.push({ role: 'user', content: question });
+  const pending = addTurn(
+    `<p class="field who-label">Navigator</p>
+     <div class="working"><span class="dot"></span><span>Reading the record…</span></div>`);
+
+  try{
+    const res = await fetch('/api/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patient_id: active.id, question, history,
+        session_id: sessionId, user_id: 'ui-user',
+        password: sitePassword,
+      }),
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'The request failed.');
+
+    const answer = data.answer || '(The endpoint returned no answer text.)';
+    history.push({ role: 'assistant', content: answer });
+
+    // Evidence rows name the record, not just the file. A filename or a bare hash
+    // tells the reader nothing about which document was used or when it was
+    // recorded, which is exactly what they need to judge the answer. Retrieval hits
+    // carry document_type and document_date; tool sources carry only an id, so the
+    // id is the fallback rather than the default.
+    const sources = data.sources || [];
+    const sourceRow = (s, i) => {
+      const kind = String(s.document_type || '').replace(/_/g, ' ');
+      const when = String(s.document_date || '').slice(0, 10);
+      const file = String(s.source_path || '').split('/').pop();
+      const label = kind || file || String(s.document_id || '').slice(0, 8) || 'record';
+      return `<li><span class="idx">${i+1}</span>
+        <span class="doc">${esc(label)}</span>${
+        when ? `<span class="num" style="margin-left:8px">${esc(when)}</span>` : ''}${
+        file && kind ? `<span class="note" style="margin-left:8px">${esc(file)}</span>` : ''}</li>`;
+    };
+    const evidence = sources.length ? `
+      <details class="evidence"><summary>Evidence · ${sources.length} documents</summary>
+        <ol>${sources.map(sourceRow).join('')}</ol></details>` : '';
+    const toolTag = data.tool
+      ? `<p class="field who-label">Navigator · ran ${esc(data.tool)}</p>`
+      : `<p class="field who-label">Navigator</p>`;
+
+    pending.innerHTML = toolTag +
+      `<div class="reply md">${renderMarkdown(answer)}</div>` + slipFor(data.tool_data) + evidence;
+  }catch(err){
+    // Drop the user turn that never got an answer. Leaving it would send a history
+    // ending in two consecutive user messages on the next question, which is not a
+    // conversation the model has any reason to handle sensibly.
+    if(history[history.length - 1]?.role === 'user') history.pop();
+    pending.innerHTML = `<p class="field who-label">Navigator</p>
+      <div class="notice">${esc(err.message)} The endpoint scales to zero, so the
+      first question after a pause can take about a minute. Ask again.</div>`;
+  }finally{
+    busy = false; $('send').disabled = false; $('entry').focus();
+  }
+}
+
+$('send').addEventListener('click', ask);
+$('restart').addEventListener('click', restart);
+$('entry').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); ask(); }
+});
+$('entry').addEventListener('input', (e) => {
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 180) + 'px';
+});
+
+/* ---------- cold-start control ----------
+   Model Serving scales to zero after ~10 minutes idle and takes about a minute to
+   wake. Waking it here, while the user is still choosing a patient, turns a
+   mysterious first-question delay into a visible, finished step. */
+let warmTimer = null;
+function warmState(state, text, detail){
+  const bar = $('warmBar');
+  const colour = state === 'ready' ? 'var(--specimen)'
+               : state === 'warming' ? 'var(--flag-high)' : 'var(--rule)';
+  bar.style.borderLeftColor = colour;
+  $('warmLabel').textContent = text;
+  $('warmLabel').style.color = state === 'ready' ? 'var(--specimen)' : 'var(--slate)';
+  if(detail !== undefined) $('warmDetail').textContent = detail;
+}
+async function warmUp(auto){
+  const button = $('warmBtn');
+  button.disabled = true;
+  const started = Date.now();
+  warmState('warming', 'Waking the endpoint', 'This takes about a minute the first time.');
+  if(warmTimer) clearInterval(warmTimer);
+  warmTimer = setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000);
+    warmState('warming', `Waking the endpoint — ${s}s`);
+  }, 1000);
+
+  // Each probe both triggers and tests the scale-up; keep probing until one
+  // succeeds, because the wake continues server-side after a probe gives up.
+  for(let attempt = 0; attempt < 8; attempt++){
+    let data = null;
+    try{ data = await (await fetch('/api/warm?password=' + encodeURIComponent(sitePassword))).json(); }catch{ /* keep trying */ }
+    if(data && data.status === 'ready'){
+      clearInterval(warmTimer);
+      const s = Math.round((Date.now() - started) / 1000);
+      warmState('ready', 'Endpoint ready',
+        `Answered in ${data.seconds}s. Questions will be fast until it idles again.`);
+      button.textContent = 'Wake again';
+      button.disabled = false;
+      return true;
+    }
+  }
+  clearInterval(warmTimer);
+  warmState('warming', 'Still waking',
+    'Take a patient and ask anyway — the question will land once it is up.');
+  button.disabled = false;
+  return false;
+}
+$('warmBtn').addEventListener('click', () => warmUp(false));
+
+/* ---------- password gate (Vercel deployment) ---------- */
+async function unlock(){
+  const value = $('gatePass').value.trim();
+  if(!value){ $('gateMsg').textContent = 'Enter the password.'; return; }
+  $('gateBtn').disabled = true;
+  $('gateMsg').textContent = 'Checking…';
+  try{
+    // validate_only checks the password and returns immediately. Sending a real
+    // question here made the gate inherit the endpoint's cold start, so opening the
+    // page could sit on "Checking..." for a minute before letting anyone in.
+    const res = await fetch('/api/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ validate_only: true, password: value }),
+    });
+    if(res.status === 401){ $('gateMsg').textContent = 'Wrong password.'; return; }
+    sitePassword = value;
+    sessionStorage.setItem('phn-pass', value);
+    $('gateView').hidden = true; $('selectView').hidden = false;
+    boot();
+  }catch{
+    $('gateMsg').textContent = 'Could not reach the server. Try again.';
+  }finally{
+    $('gateBtn').disabled = false;
+  }
+}
+$('gateBtn').addEventListener('click', unlock);
+$('gatePass').addEventListener('keydown', (e) => { if(e.key === 'Enter') unlock(); });
+if(sitePassword){ $('gateView').hidden = true; $('selectView').hidden = false; boot(); }
+
+</script>
+</body>
+</html>

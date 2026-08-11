@@ -1,0 +1,52 @@
+bundle:
+  name: patient-history-navigator
+
+include:
+  - release_job.yml
+
+variables:
+  model_name:
+    description: Fully qualified Unity Catalog model name.
+    default: workspace.default.dbdemos_rag_demo
+  endpoint_name:
+    description: Production Model Serving endpoint.
+    default: dbdemos-rag-prod
+  experiment_name:
+    description: MLflow experiment path.
+    default: /Shared/dbdemos-rag-prod
+  workload_size:
+    description: Model Serving workload size.
+    default: Small
+  prod_service_principal_id:
+    description: Application ID of the production service principal.
+    default: ""
+
+# This directory holds only the bundle: the serving agent, its support modules,
+# the ingestion job and their configuration. Documentation, the local UI, the
+# public deployment and the data generator are siblings of it, and the generated
+# corpus lives in a Unity Catalog Volume. Nothing here needs excluding, so a
+# deploy uploads a few hundred kilobytes rather than the 1.5GB it once did.
+sync:
+  include:
+    - "*.py"
+    - "*.yaml"
+    - "*.yml"
+    - "*.json"
+    - "requirements.txt"
+  exclude:
+    - "__pycache__/**"
+
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.prod_service_principal_id}

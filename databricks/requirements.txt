@@ -1,0 +1,11 @@
+mlflow[databricks]>=3.1,<4
+databricks-sdk>=0.50,<1
+databricks-langchain>=0.5,<1
+databricks-ai-search>=0.60,<1
+langchain-core>=0.3,<1
+langchain-text-splitters>=0.3,<1
+langgraph>=1.0,<2
+pydantic>=2,<3
+pypdf>=5,<7
+pyyaml>=6,<7
+requests>=2.31,<3

@@ -1,0 +1,232 @@
+# Patient History Navigator - one configuration file shared by ingestion,
+# serving, evaluation, resource setup, and deployment.
+
+project_config:
+  name: Patient History Navigator
+  domain: synthetic patient-record navigation
+  default_patient_id: demo-patient
+  safety_scope: record organization and explanation only; no diagnosis or treatment
+
+preprocessing_config:
+  # Upload Synthea FHIR bundles and narrative files under this UC Volume folder.
+  volume_path: /Volumes/workspace/default/rag/generated_patient_records
+  # Subset glob: the 5 patients whose IDs start with "7" (225 PDFs).
+  # Restricted to documents/ on purpose. A bare "patient_7*/**/*" also picks up each
+  # patient_manifest.json, and because no patient id can be derived from that
+  # filename those chunks land under a bogus patient_id of "patient_manifest" --
+  # retrievable content belonging to no patient. documents/ also excludes source/
+  # CCDA XML, which supported_extensions ignores anyway.
+  # The full 108-patient corpus is ~24,000 chunks, which at embedding_batch_size 1
+  # and a 5s interval needs ~33h -- far past the job's timeout_seconds. Widen this
+  # glob only after raising embedding throughput and the job timeout together.
+  # Use "**/*" for the whole corpus.
+  file_glob: "patient_7*/documents/**/*"
+  supported_extensions: [".pdf", ".txt", ".md", ".json"]
+  sidecar_suffix: .metadata.json
+  default_patient_id: demo-patient
+
+  # PDF path: pypdf first. In auto mode, low-quality extraction falls back to
+  # Databricks ai_parse_document, whose parsed output is cached in Delta.
+  ocr_mode: auto                 # auto | always | never
+  ocr_page_batch_size: 500
+  pypdf_quality:
+    min_total_chars: 200
+    min_chars_per_page: 30
+    min_readable_page_ratio: 0.60
+    min_alpha_ratio: 0.20
+
+  # Unity Catalog Delta tables.
+  parsed_cache_table: workspace.default.patient_history_parsed_documents
+  processed_documents_table: workspace.default.patient_history_processed_documents
+  documents_table: workspace.default.patient_history_documents
+  source_table: workspace.default.patient_history_rag_chunks
+
+  # Active chunking implementation: LangChain RecursiveCharacterTextSplitter.
+  # The old manual character loop remains commented in preprocessing.py for history.
+  chunk_size: 900
+  chunk_overlap: 150
+  chunk_separators: ["\n\n", "\n", ". ", "; ", ", ", " ", ""]
+
+  # Measured, not assumed. scripts/compare_embedding_models.py drove
+  # databricks-qwen3-embedding-0-6b at 25 consecutive batches of 16 with no
+  # throttling and no slow batch: 400 chunks in 18s, 22 chunks/s sustained.
+  #
+  # The previous values here were batch 1 with a 5s sleep -- 0.2 chunks/s, about
+  # 100x slower than the endpoint allows -- and they are the reason this project
+  # documented a 33-hour embedding cost for the full corpus and ingested 5 of 108
+  # patients. At the measured rate the same 24,000 chunks embed in ~18 minutes.
+  #
+  # 16 is the ceiling, not a guess: batch 32 stalls past 180s rather than
+  # returning an error. Other endpoints differ -- databricks-gte-large-en answers
+  # at 8 and stalls at 16 -- so re-measure before changing embedding_endpoint_name.
+  embedding_batch_size: 16
+  embedding_request_interval_seconds: 0.0
+  embedding_retry_timeout_seconds: 90
+  embedding_max_attempts: 8
+  embedding_backoff_seconds: 5.0
+  embedding_max_backoff_seconds: 120.0
+
+  create_index_if_missing: true
+  sync_index: true
+
+# Exact Databricks resources used by the online application.
+databricks_resources:
+  vector_search_endpoint_name: rag-vs-endpoint
+  # Chosen by measurement, not by name. This workspace offers three embedding
+  # endpoints, all 1024-dimensional, so any of them is a drop-in swap:
+  #
+  #   model                            recall@5   MRR    margin   sustained
+  #   databricks-qwen3-embedding-0-6b    0.94    0.860   +0.279   21.4/s @16
+  #   databricks-bge-large-en            0.92    0.802   +0.142   20.9/s @16
+  #   databricks-gte-large-en            0.92    0.770   +0.161    2.0/s @8
+  #
+  # "0-6b" reads like the small one beside two models called "large", and is not:
+  # 0.6b is 600M parameters, where the BERT-family "large" models are 335-434M.
+  # It wins every metric here, and its margin between correct and incorrect chunks
+  # is roughly double -- ranking the same documents with far more confidence.
+  # Re-run scripts/compare_embedding_models.py before changing this.
+  embedding_endpoint_name: databricks-qwen3-embedding-0-6b
+  llm_endpoint_name: databricks-meta-llama-3-3-70b-instruct
+
+  # Required by the deterministic timeline/diff/trend tools. Copy the ID from
+  # SQL Warehouses -> your warehouse -> Connection details.
+  sql_warehouse_id: b0affc2359ab09a3
+
+  # Unity Catalog managed memory store (Beta/preview; availability depends on workspace).
+  memory_store_name: workspace.default.patient_history_memory
+
+retriever_config:
+  vector_search_index: workspace.default.patient_history_chunks_index
+  schema:
+    primary_key: chunk_id
+    chunk_text: text_chunk
+    document_uri: source_path
+  per_query_k: 6
+  final_k: 8
+  rrf_constant: 60
+  use_reranker: true
+
+query_strategy_config:
+  # Best default combination for this project: resolve conversation references,
+  # split multi-part questions, and search several faithful phrasings.
+  active_strategies:
+    - reformulation
+    - decomposition
+    - multi_query
+
+  # All five are implemented. HyDE and hypothetical questions can be activated
+  # per request with custom_inputs.query_strategies for experiments/demos.
+  implemented_strategies:
+    - reformulation
+    - decomposition
+    - multi_query
+    - hyde
+    - hypothetical_questions
+  multi_query_count: 3
+  hypothetical_question_count: 2
+  max_total_queries: 10
+
+cache_config:
+  # Process-local Model Serving cache. It disappears after scale-to-zero,
+  # redeployment, or routing to a different worker.
+  query_plan_ttl_seconds: 600
+  retrieval_ttl_seconds: 300
+  max_query_plans: 256
+  max_retrieval_entries: 512
+  cache_final_answers: false
+
+memory_config:
+  enabled: true
+  fail_open: true
+  timeout_seconds: 20
+  request_history_limit: 10
+  recent_message_limit: 10
+  default_user_id: demo-user
+  default_session_id: demo-session
+
+tools_config:
+  enabled: true
+  enable_intent_routing: true
+  documents_table: workspace.default.patient_history_documents
+
+  # Per-analyte numeric observations, one row per measurement, parsed out of the
+  # report text. analyze_lab_trend reads this instead of documents_table: a lab
+  # panel PDF becomes a single documents row with one numeric_value column, which
+  # cannot hold the 11 analytes of a CBC panel. Leave blank to fall back to
+  # documents_table (numeric trends then only work for FHIR-ingested records).
+  observations_table: workspace.default.patient_history_lab_observations
+  sql_timeout_seconds: 50
+  timeline_default_rows: 200
+  timeline_max_rows: 500
+  diff_max_lines: 250
+
+llm_config:
+  llm_prompt_template: |
+    You are Patient History Navigator, a record-navigation assistant for synthetic patient data.
+
+    Safety and grounding rules:
+    - Use only the evidence supplied below.
+    - Never diagnose, prescribe, recommend treatment, or claim clinical significance.
+    - Distinguish recorded facts from missing information.
+    - Cite supporting chunks inline as [Evidence 1], [Evidence 2], and so on.
+    - Never combine facts from another patient.
+    - When evidence is insufficient or conflicting, say exactly what is missing or conflicting.
+
+    Persistent session context:
+    {memory_context}
+
+    Recent conversation:
+    {chat_history}
+
+    Retrieved record evidence:
+    {context}
+
+    User question:
+    {question}
+
+    Answer:
+  llm_parameters:
+    temperature: 0.1
+    max_tokens: 900
+
+quality_gate:
+  keyword_coverage: 0.50
+  relevance_to_query: 0.65
+  retrieval_groundedness: 0.65
+  safety: 1.00
+
+serving_config:
+  model_name: workspace.default.dbdemos_rag_demo
+  endpoint_name: dbdemos-rag-prod
+  experiment_name: /Shared/dbdemos-rag-prod
+  mlflow_experiment_id: "1387270176798220"
+  workload_size: Small
+  scale_to_zero: true
+
+  # Manual authentication for the Unity Catalog memory store.
+  #
+  # Memory stores support neither automatic authentication passthrough nor
+  # on-behalf-of-user auth on Model Serving, so the scoped token the endpoint
+  # normally receives cannot reach the memory API (it returns 403). Injecting a
+  # secret-backed token is the documented escape hatch for such resources.
+  #
+  # WARNING: setting DATABRICKS_TOKEN disables automatic passthrough for every
+  # other resource this agent uses (vector index, both serving endpoints, the
+  # documents table and the SQL warehouse). The identity behind this token must
+  # therefore retain access to all of them.
+  #
+  # Leave the scope blank to fall back to automatic passthrough and no memory.
+  memory_auth_secret_scope: patient-history-navigator
+  memory_auth_secret_key: memory-store-token
+  workspace_host: https://dbc-b7a36bd8-4a4a.cloud.databricks.com
+
+input_example:
+  input:
+    - role: user
+      content: Build a timeline of this patient's recorded events.
+  context:
+    user_id: demo-user
+    conversation_id: demo-session
+  custom_inputs:
+    patient_id: demo-patient
+    tool: timeline
