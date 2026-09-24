@@ -29,3 +29,9 @@ docs/
 # Local MLflow trace store used by scripts/check_graph.py when run ad hoc.
 mlflow.db
 mlruns/
+
+# Local export copies of the project (the 1.1GB zip includes the corpus, and
+# complete-code/ carries its own .vercel link). The repository is the source.
+complete-code/
+complete-code.zip
+databricks.zip
