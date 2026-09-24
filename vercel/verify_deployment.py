@@ -85,7 +85,10 @@ def main() -> int:
                 failures.append("the roster is empty after a reload")
 
             if args.ask:
-                page.locator("#roster .record").first.click(timeout=8000)
+                # A reload reopens the record it was on, so the roster is only
+                # there to click when the page came back to the picker.
+                if not page.locator("#chatView").is_visible():
+                    page.locator("#roster .record").first.click(timeout=8000)
                 page.fill("#entry", "how many lab records does he have?")
                 page.click("#send")
                 try:
