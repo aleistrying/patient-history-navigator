@@ -1,6 +1,6 @@
 # Public deployment on Vercel
 
-**Live: <https://patient-history-navigator.vercel.app> — password `demo`**
+**Live: <https://patient-history-navigator.vercel.app>** — password-protected; ask the team for the password.
 
 Puts the navigator behind a shareable URL so a reviewer can use it without a
 Databricks login. The browser never holds a Databricks credential: the page calls
@@ -71,7 +71,7 @@ repository). Add each to Production, Preview and Development.
 | --- | --- | --- |
 | `DATABRICKS_HOST` | `https://dbc-b7a36bd8-4a4a.cloud.databricks.com` | workspace to call |
 | `DATABRICKS_TOKEN` | a personal access token | signs the request |
-| `PHN_PASSWORD` | `demo` | stops strangers spending your compute |
+| `PHN_PASSWORD` | a long passphrase, shared out of band | stops strangers spending your compute |
 | `PHN_ENDPOINT` | `dbdemos-rag-prod` | optional, this is the default |
 
 Create the token with:
@@ -80,27 +80,33 @@ Create the token with:
 databricks tokens create --comment "vercel patient history navigator" --lifetime-seconds 7776000
 ```
 
-The token needs **CAN QUERY** on the serving endpoint. Treat it as a secret: it can
-run queries against your workspace and consume Free Edition compute.
+The token needs **CAN QUERY** on the serving endpoint, and for `/api/warm` to rebuild
+missing endpoints, the right to create serving and AI Search endpoints. A personal
+access token carries its owner's permissions, which covers both. Treat it as a
+secret: it can run queries against your workspace and consume Free Edition compute.
 
-## Why a password, and why it is `demo`
+## Why a password, and why it is not in this repository
 
 The URL is public, so without one anybody who finds it can run queries billed to
 your workspace. The records themselves are synthetic, so the exposure is cost
 rather than privacy, but the gate costs one line to add and removes the question.
 The page stores the password in `sessionStorage`, so a reviewer types it once.
 
-`demo` is deliberately guessable. It is meant to be said out loud in a room and
-typed without a second attempt, and the only thing behind it is synthetic data on
-Free Edition compute. Change it to something longer if the link ever outlives the
-presentation:
+The repository is public and the page can create Databricks resources (see
+`api/warm.py`), so the password lives only in the Vercel environment and is shared
+directly with whoever needs it. The one in this repository's early history is no
+longer valid. To change it, without it ever touching shell history or a file here:
 
 ```bash
 cd vercel
 vercel env rm PHN_PASSWORD production --yes
-printf 'the-new-password' | vercel env add PHN_PASSWORD production
+vercel env add PHN_PASSWORD production   # prompts for the value
 vercel --prod        # required: functions keep the old value until redeployed
 ```
+
+`scripts/build_slides.py`, `scripts/refresh_study_guide.py` and
+`verify_deployment.py` read the password from the `PHN_PASSWORD` environment
+variable, so the built slides and guide carry it without the source doing so.
 
 ## Timing, and why `maxDuration` is 300
 

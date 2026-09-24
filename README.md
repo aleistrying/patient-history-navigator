@@ -13,7 +13,7 @@ significance.
 
 ## Try it
 
-**<https://patient-history-navigator.vercel.app>** — password **`demo`**
+**<https://patient-history-navigator.vercel.app>** — password-protected; ask the team for the password.
 
 No install and no Databricks login. Pick one of five synthetic patients and ask.
 The serving endpoint scales to zero after about ten minutes idle — it releases its

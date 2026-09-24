@@ -5,7 +5,7 @@ neither catches a page that parses and serves fine yet throws on load — one
 undeclared identifier is enough to leave nothing on the page clickable. Only
 loading the page and clicking through it finds that.
 
-    python3 vercel/verify_deployment.py [--url URL] [--password demo]
+    PHN_PASSWORD=... python3 vercel/verify_deployment.py [--url URL] [--password PW]
 
 Exits non-zero if any step fails, so it can gate a release.
 """
@@ -13,6 +13,7 @@ Exits non-zero if any step fails, so it can gate a release.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 DEFAULT_URL = "https://patient-history-navigator.vercel.app"
@@ -21,10 +22,12 @@ DEFAULT_URL = "https://patient-history-navigator.vercel.app"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--password", default="demo")
+    parser.add_argument("--password", default=os.environ.get("PHN_PASSWORD", ""))
     parser.add_argument("--ask", action="store_true",
                         help="also send a real question (slow: wakes the endpoint)")
     args = parser.parse_args()
+    if not args.password:
+        parser.error("set PHN_PASSWORD or pass --password")
 
     try:
         from playwright.sync_api import sync_playwright
