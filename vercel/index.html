@@ -873,17 +873,40 @@ async function warmUp(auto){
   button.disabled = true;
   const started = Date.now();
   warmState('warming', 'Waking the endpoint', 'This takes about a minute the first time.');
+  let restoring = false;
   if(warmTimer) clearInterval(warmTimer);
   warmTimer = setInterval(() => {
     const s = Math.round((Date.now() - started) / 1000);
-    warmState('warming', `Waking the endpoint — ${s}s`);
+    warmState('warming', restoring
+      ? `Rebuilding the endpoint — ${Math.floor(s / 60)}m ${s % 60}s`
+      : `Waking the endpoint — ${s}s`);
   }, 1000);
 
   // Each probe both triggers and tests the scale-up; keep probing until one
   // succeeds, because the wake continues server-side after a probe gives up.
+  // "restoring" means the endpoint was gone and the server is rebuilding it
+  // (Vercel only). That takes 20-30 minutes, so those polls are spaced out and
+  // do not count against the wake attempts.
+  const restoreDeadline = started + 45 * 60 * 1000;
   for(let attempt = 0; attempt < 8; attempt++){
     let data = null;
     try{ data = await (await fetch('/api/warm?password=' + encodeURIComponent(sitePassword))).json(); }catch{ /* keep trying */ }
+    if(data && data.status === 'restoring' && Date.now() < restoreDeadline){
+      restoring = true;
+      $('warmDetail').textContent = data.error
+        ? `Rebuild problem: ${data.error}` : data.detail;
+      attempt--;
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+      continue;
+    }
+    if(restoring){ restoring = false; $('warmDetail').textContent = ''; }
+    // A probe the endpoint refused outright comes back in about a second; without
+    // a pause the attempts would all be spent before a just-deployed endpoint
+    // starts answering.
+    if(data && data.status === 'warming' && (data.seconds || 0) < 5){
+      if(data.detail) $('warmDetail').textContent = data.detail;
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+    }
     if(data && data.status === 'ready'){
       clearInterval(warmTimer);
       const s = Math.round((Date.now() - started) / 1000);
