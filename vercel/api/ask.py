@@ -19,8 +19,10 @@ resolved functionTimeout also 300. Verify before changing it -- the numbers belo
 are derived from maxDuration and have to move with it.
 """
 
+import io
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -42,6 +44,10 @@ RESERVED_SECONDS = 20
 # a retry the platform kills mid-flight is worse than no retry at all.
 ATTEMPTS = 2
 TIMEOUT_SECONDS = (MAX_DURATION_SECONDS - RESERVED_SECONDS) // ATTEMPTS
+# A spurious 404 comes back in about a second, so these retries cost ~15s at most
+# and come out of RESERVED_SECONDS rather than the timeout budget.
+ROUTING_RETRIES = 4
+ROUTING_RETRY_SECONDS = 3
 
 
 def answer_text(response: dict) -> str:
@@ -82,6 +88,22 @@ def call_databricks(payload: dict) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def endpoint_exists() -> bool:
+    """Whether the serving endpoint is defined at all (it may still be starting)."""
+    host = (os.environ.get("DATABRICKS_HOST") or "").rstrip("/")
+    request = urllib.request.Request(
+        f"{host}/api/2.0/serving-endpoints/{ENDPOINT}",
+        headers={"Authorization": f"Bearer {os.environ.get('DATABRICKS_TOKEN') or ''}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15):
+            return True
+    except urllib.error.HTTPError as exc:
+        return exc.code != 404
+    except Exception:
+        return True
+
+
 def is_timeout(error: Exception) -> bool:
     """Whether the call gave up waiting, as opposed to being refused an answer.
 
@@ -99,6 +121,29 @@ def is_timeout(error: Exception) -> bool:
     return "timed out" in text or "timeout" in text or "deadline" in text
 
 
+def call_databricks_past_routing_404(payload: dict) -> dict:
+    """Call the endpoint, retrying a spurious 404 ENDPOINT_NOT_FOUND.
+
+    A READY endpoint intermittently answers 404 ENDPOINT_NOT_FOUND within about a
+    second (measured: 1 call in 6, and on consecutive probes right after a
+    deploy), then answers normally on the next call. The request never reaches
+    the agent, so a retry cannot repeat any work. A genuinely missing endpoint
+    still fails after ROUTING_RETRIES and the caller reports it.
+    """
+    for attempt in range(ROUTING_RETRIES + 1):
+        try:
+            return call_databricks(payload)
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+            if (exc.code != 404 or b"ENDPOINT_NOT_FOUND" not in body
+                    or attempt >= ROUTING_RETRIES):
+                raise urllib.error.HTTPError(
+                    exc.url, exc.code, exc.msg, exc.hdrs, io.BytesIO(body)
+                ) from None
+            time.sleep(ROUTING_RETRY_SECONDS)
+    raise RuntimeError("unreachable")
+
+
 def call_databricks_with_retry(payload: dict) -> dict:
     """Call the endpoint, retrying once past a cold-start timeout.
 
@@ -110,7 +155,7 @@ def call_databricks_with_retry(payload: dict) -> dict:
     last: Exception | None = None
     for attempt in range(ATTEMPTS):
         try:
-            return call_databricks(payload)
+            return call_databricks_past_routing_404(payload)
         except urllib.error.HTTPError:
             raise
         except Exception as exc:
@@ -176,6 +221,22 @@ class handler(BaseHTTPRequestHandler):
             response = call_databricks_with_retry(payload)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "ignore")[:300]
+            if exc.code == 404 and "ENDPOINT_NOT_FOUND" in detail:
+                # A just-deployed endpoint also answers 404 for a few minutes, so
+                # only call it missing when the endpoint itself is not there.
+                if endpoint_exists():
+                    self._send(503, {"error": (
+                        f"{ENDPOINT} was just deployed and is not accepting "
+                        "requests yet. Ask again in a minute or two."
+                    )})
+                else:
+                    # Gone, not asleep. /api/warm rebuilds it.
+                    self._send(502, {"error": (
+                        f"The serving endpoint {ENDPOINT} does not exist. Open the "
+                        "patient list and press 'Wake it now' to rebuild it; that "
+                        "takes 20-30 minutes."
+                    )})
+                return
             self._send(502, {"error": f"Databricks returned {exc.code}. {detail}"})
             return
         except Exception as exc:
