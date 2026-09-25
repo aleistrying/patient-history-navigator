@@ -136,7 +136,6 @@ read it. The text version is kept as ground truth for scoring OCR output against
 - The synthetic-data banner must remain legible after degradation. An unmarked degraded copy
   is a provenance regression, not a test asset.
 
-Rationale and the full acceptance criteria are in `docs/IMPLEMENTATION_GUIDE.md` section 30.
 
 ## Required RAG privacy boundary
 

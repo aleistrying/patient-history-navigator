@@ -25,9 +25,8 @@ request without also reading prompt text, SQL, or retrieval internals.
 The branch is data, so an unroutable tool cannot fall through into the wrong path.
 Each node reads the state keys it declares and writes the ones it owns, so the two
 paths share no mutable locals. And the topology is inspectable:
-`compiled.get_graph().draw_mermaid()` renders it, and
-`scripts/build_technical_report.py` reads the node names off the compiled graph, so
-the published figure cannot describe a different graph.
+`compiled.get_graph().draw_mermaid()` renders it, and `scripts/check_graph.py`
+drives both paths of the compiled graph end to end.
 
 Retrieval is the common path and `route` is a full LLM call, so the two run in
 sequence. Starting retrieval speculatively alongside `route` would halve the

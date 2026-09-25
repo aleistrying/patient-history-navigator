@@ -4,7 +4,7 @@ Two sets, and they are the ones that carry the most risk on stage:
 
 * the fifteen one-click openers in `ui/app.py`'s roster -- three per patient, sitting
   as buttons under the entry box, so they are the likeliest thing to be pressed;
-* the scripted questions in `docs/DEMO_RUNBOOK.md`, including the ones whose whole
+* the scripted demo questions, including the ones whose whole
   point is that they refuse or report an absence.
 
 It calls the endpoint directly rather than driving a browser, so a full pass takes

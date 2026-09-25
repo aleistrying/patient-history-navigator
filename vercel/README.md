@@ -104,9 +104,8 @@ vercel env add PHN_PASSWORD production   # prompts for the value
 vercel --prod        # required: functions keep the old value until redeployed
 ```
 
-`scripts/build_slides.py`, `scripts/refresh_study_guide.py` and
-`verify_deployment.py` read the password from the `PHN_PASSWORD` environment
-variable, so the built slides and guide carry it without the source doing so.
+`verify_deployment.py` reads the password from the `PHN_PASSWORD` environment
+variable, so running the check does not need it written anywhere here.
 
 ## Timing, and why `maxDuration` is 300
 
