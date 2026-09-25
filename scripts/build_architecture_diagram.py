@@ -1,18 +1,15 @@
-"""Render Figure 1, the end-to-end architecture diagram, to a PNG.
+"""Render the end-to-end architecture diagram, as SVG or PNG, light or dark.
 
-The figure used to exist only as `word/media/image1.png` inside the study guide, so
-correcting it meant editing a binary. It is drawn here instead, and
-`scripts/refresh_study_guide.py` swaps the rendered bytes into the .docx, so the
-figure can be corrected again the same way any other text can.
+The figure is drawn from code rather than kept as a binary, so correcting a label
+is a text edit like any other.
 
-    python3 scripts/build_architecture_diagram.py [output.png]
+    python3 scripts/build_architecture_diagram.py [output.svg|output.png] [--dark]
 
-Defaults to `deliverables/architecture_diagram.png`.
+Defaults to `assets/architecture-light.svg`; the format follows the extension.
+`scripts/build_readme_figures.py` writes both of the README's copies.
 
-The canvas is 1700x900 pixels because the .docx frame declares 7.00 x 3.71 inches
-for this picture and Word stretches the bytes to fill it. Matching the original
-pixel aspect is what keeps the replacement from being distorted; change `SIZE` only
-alongside the frame.
+The canvas is 1700x900 pixels, a 1.89:1 aspect the layout below is tuned for;
+change `WIDTH` and `HEIGHT` only together with the geometry.
 
 Every label is a name that appears in `databricks/navigator_config.yaml` or in the
 module it describes. matplotlib is a documentation-build dependency only -- nothing
@@ -32,16 +29,40 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT = ROOT / "deliverables" / "architecture_diagram.png"
+DEFAULT_OUTPUT = ROOT / "assets" / "architecture-light.svg"
 
 # Pixel canvas. figsize x dpi = exactly these numbers, so a coordinate below is a
 # pixel and the crop is predictable.
 WIDTH, HEIGHT, DPI = 1700, 900, 200
 
-INK = "#16223C"          # Titles and borders' darkest value.
-DETAIL = "#41506B"       # Body lines: lighter than the title, still print-safe.
-FOOTNOTE = "#5A6579"
-ARROW = "#16223C"
+# Light is the print theme. Dark matches GitHub's dark page (#0d1117): each box
+# keeps its stage's edge hue, lightened, over a fill mixed from that hue and the
+# page, so the stages stay distinguishable without glowing.
+THEMES = {
+    "light": {"surface": "#FFFFFF", "ink": "#16223C", "detail": "#41506B",
+              "footnote": "#5A6579", "arrow": "#16223C"},
+    "dark": {"surface": "#0D1117", "ink": "#E6EDF3", "detail": "#B5C0CE",
+             "footnote": "#8B96A5", "arrow": "#C9D3DF"},
+}
+INK = DETAIL = FOOTNOTE = ARROW = SURFACE = ""
+DARK = False
+
+
+def use_theme(name: str) -> None:
+    global INK, DETAIL, FOOTNOTE, ARROW, SURFACE, DARK
+    theme = THEMES[name]
+    INK, DETAIL, FOOTNOTE = theme["ink"], theme["detail"], theme["footnote"]
+    ARROW, SURFACE, DARK = theme["arrow"], theme["surface"], name == "dark"
+
+
+def mix(colour: str, other: str, weight: float) -> str:
+    """`weight` of `colour` over `other`, both #RRGGBB."""
+    a = [int(colour[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x * weight + y * (1 - weight)):02X}" for x, y in zip(a, b))
+
+
+use_theme("light")
 
 # One fill per stage, as the original figure had. The fills are pale enough that
 # they all reduce to a light grey in a greyscale print, so the border weight and the
@@ -108,6 +129,8 @@ def draw_box(ax, x, y, w, h, title, lines, fill, edge) -> list:
     Returns the text artists paired with the right-hand limit they must stay inside,
     for `check_fit` to measure once a renderer exists.
     """
+    if DARK:
+        fill, edge = mix(edge, SURFACE, 0.22), mix(edge, "#FFFFFF", 0.55)
     ax.add_patch(FancyBboxPatch(
         (x, y), w, h,
         boxstyle="round,pad=0,rounding_size=12",
@@ -153,13 +176,16 @@ def arrow(ax, start, end) -> None:
     ))
 
 
-def build(output: Path) -> Path:
-    fig = plt.figure(figsize=(WIDTH / DPI, HEIGHT / DPI), dpi=DPI, facecolor="white")
+def build(output: Path, theme: str = "light") -> Path:
+    use_theme(theme)
+    # Glyphs as paths, so the SVG renders the same wherever the font is missing.
+    plt.rcParams["svg.fonttype"] = "path"
+    fig = plt.figure(figsize=(WIDTH / DPI, HEIGHT / DPI), dpi=DPI, facecolor=SURFACE)
     ax = fig.add_axes((0, 0, 1, 1))
     ax.set_xlim(0, WIDTH)
     ax.set_ylim(0, HEIGHT)
     ax.axis("off")
-    ax.set_facecolor("white")
+    ax.set_facecolor(SURFACE)
 
     measured = [(ax.text(MARGIN, HEIGHT - 62, TITLE, fontsize=TITLE_SIZE,
                          fontweight="bold", color=INK, ha="left", va="center"),
@@ -198,22 +224,20 @@ def build(output: Path) -> Path:
         print(f"  WARNING: {note}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=DPI, facecolor="white")
+    fig.savefig(output, dpi=DPI, facecolor=SURFACE)
     plt.close(fig)
     return output
 
 
 def main(argv: list[str]) -> int:
-    output = Path(argv[1]) if len(argv) > 1 else DEFAULT_OUTPUT
-    build(output)
-    from PIL import Image  # Only to report what was written.
-
-    with Image.open(output) as image:
-        try:
-            shown = output.relative_to(ROOT)
-        except ValueError:  # An output written outside the repository, e.g. a scratch check.
-            shown = output
-        print(f"  wrote {shown}  {image.size[0]}x{image.size[1]} at {DPI} dpi")
+    args = [arg for arg in argv[1:] if arg != "--dark"]
+    output = Path(args[0]) if args else DEFAULT_OUTPUT
+    build(output, "dark" if "--dark" in argv else "light")
+    try:
+        shown = output.relative_to(ROOT)
+    except ValueError:  # An output written outside the repository, e.g. a scratch check.
+        shown = output
+    print(f"  wrote {shown}  {WIDTH}x{HEIGHT}")
     return 0
 
 
