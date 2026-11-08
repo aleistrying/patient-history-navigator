@@ -356,7 +356,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
 /* ---------- step 1 ---------- */
 async function boot(){
   try{
-    const res = await fetch('/api/patients');
+    const res = await fetch('/api/patients', {headers: {'X-PHN-Password': sitePassword}});
     const data = await res.json();
     PATIENTS = data.patients || [];
   }catch{
@@ -890,7 +890,7 @@ async function warmUp(auto){
   const restoreDeadline = started + 45 * 60 * 1000;
   for(let attempt = 0; attempt < 8; attempt++){
     let data = null;
-    try{ data = await (await fetch('/api/warm?password=' + encodeURIComponent(sitePassword))).json(); }catch{ /* keep trying */ }
+    try{ data = await (await fetch('/api/warm', {headers: {'X-PHN-Password': sitePassword}})).json(); }catch{ /* keep trying */ }
     if(data && data.status === 'restoring' && Date.now() < restoreDeadline){
       restoring = true;
       $('warmDetail').textContent = data.error
@@ -939,6 +939,7 @@ async function unlock(){
       body: JSON.stringify({ validate_only: true, password: value }),
     });
     if(res.status === 401){ $('gateMsg').textContent = 'Wrong password.'; return; }
+    if(!res.ok){ $('gateMsg').textContent = 'This demo is temporarily unavailable. Try again later.'; return; }
     sitePassword = value;
     sessionStorage.setItem('phn-pass', value);
     $('gateView').hidden = true; $('selectView').hidden = false;

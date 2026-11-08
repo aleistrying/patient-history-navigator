@@ -24,19 +24,19 @@ re-embed. The whole rebuild takes roughly 20-30 minutes.
 
 Returns {"status": "ready"|"warming"|"restoring", "seconds": n, "detail": text}.
 
-The password is required, as a query parameter, because a probe spends Model
-Serving compute and a restore creates resources, and this URL is public. GET cannot
-carry the JSON body /api/ask uses, so vercel/sync_from_ui.py appends ?password= to
-the page's fetch.
+The password is required in X-PHN-Password because a probe spends Model Serving
+compute and a restore creates resources. Keeping it out of the URL also keeps it
+out of URL-based logs and browser history.
 """
 
 import json
 import os
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
+
+from auth_gate import access_error
 
 ENDPOINT = os.environ.get("PHN_ENDPOINT", "dbdemos-rag-prod")
 # Long enough to succeed against a warm endpoint (4-16s), short enough that a cold
@@ -205,16 +205,16 @@ class handler(BaseHTTPRequestHandler):
         encoded = json.dumps(body).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
-        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        expected = os.environ.get("PHN_PASSWORD") or ""
-        if expected and (query.get("password") or [""])[0] != expected:
-            self._send(401, {"error": "Wrong password."})
+        denied = access_error(self.headers.get("X-PHN-Password"))
+        if denied:
+            self._send(denied[0], {"error": denied[1]})
             return
 
         host = (os.environ.get("DATABRICKS_HOST") or "").rstrip("/")

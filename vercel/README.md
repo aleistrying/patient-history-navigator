@@ -18,7 +18,7 @@ browser ──POST /api/ask──▶ Vercel function ──Bearer token──▶
 | Route | What it does |
 | --- | --- |
 | `api/ask.py` | Checks the password, signs the invocation, returns the answer, its sources and the structured tool output. |
-| `api/patients.py` | Serves the patient roster. Touches nothing sensitive. |
+| `api/patients.py` | Requires the password header before serving the synthetic patient roster. |
 | `api/warm.py` | Fires one short-timeout probe to start the endpoint scaling up, and reports `ready` or `warming`. Backs the **Wake it now** button. |
 
 **These must stay in step with `ui/app.py`, which serves the same three routes
@@ -27,8 +27,14 @@ because `api/warm.py` did not exist: the route 404'd, the client could not parse
 the error body, and it read that as "not ready yet". A route missing from one of
 two deployments is invisible to any check run against the other.
 
-`/api/warm` takes the password as a query parameter rather than a body, because it
-is a GET. `sync_from_ui.py` adds that parameter and asserts it is present.
+`/api/warm` and `/api/patients` require the `X-PHN-Password` header. Passwords
+are never sent in URLs. All three functions deny access with HTTP 503 when
+`PHN_PASSWORD` is missing, or HTTP 401 when it does not match. The generated
+page stays locked on either response. POST bodies are limited to 1 MiB.
+
+`auth_gate.py` must be included at the deployment root alongside `api/`.
+Run the access-boundary tests without any network or Databricks calls:
+`python3 -m unittest discover -s tests -v` (from the repository root).
 
 ## Deploy
 

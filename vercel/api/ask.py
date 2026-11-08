@@ -27,7 +27,10 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
+from auth_gate import access_error
+
 ENDPOINT = os.environ.get("PHN_ENDPOINT", "dbdemos-rag-prod")
+MAX_BODY_BYTES = 1024 * 1024
 
 # Must match vercel.json's maxDuration for "api/ask.py". Everything below is a
 # budget carved out of it, because the client timeout has to expire *before* the
@@ -170,6 +173,7 @@ class handler(BaseHTTPRequestHandler):
         encoded = json.dumps(body).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -178,14 +182,19 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length") or 0)
+            if length < 0 or length > MAX_BODY_BYTES:
+                self._send(413, {"error": "The request is too large."})
+                return
             request = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(request, dict):
+                raise ValueError("Expected a JSON object")
         except Exception:
             self._send(400, {"error": "Could not read the request."})
             return
 
-        expected = os.environ.get("PHN_PASSWORD") or ""
-        if expected and str(request.get("password") or "") != expected:
-            self._send(401, {"error": "Wrong password."})
+        denied = access_error(request.get("password"))
+        if denied:
+            self._send(denied[0], {"error": denied[1]})
             return
 
         # The password is already checked above, so answer without calling Model

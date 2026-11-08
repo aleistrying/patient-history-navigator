@@ -8,6 +8,8 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler
 
+from auth_gate import access_error
+
 PATIENTS = [
     {
         "id": "73b97ede-ebda-6de2-36c8-c7c6cc9ad9ff",
@@ -93,11 +95,15 @@ PATIENTS = [
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        body = json.dumps(
-            {"patients": PATIENTS, "endpoint": os.environ.get("PHN_ENDPOINT", "dbdemos-rag-prod")}
-        ).encode("utf-8")
-        self.send_response(200)
+        denied = access_error(self.headers.get("X-PHN-Password"))
+        response = {"error": denied[1]} if denied else {
+            "patients": PATIENTS,
+            "endpoint": os.environ.get("PHN_ENDPOINT", "dbdemos-rag-prod"),
+        }
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(denied[0] if denied else 200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

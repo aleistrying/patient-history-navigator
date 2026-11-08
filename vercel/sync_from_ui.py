@@ -55,6 +55,7 @@ async function unlock(){
       body: JSON.stringify({ validate_only: true, password: value }),
     });
     if(res.status === 401){ $('gateMsg').textContent = 'Wrong password.'; return; }
+    if(!res.ok){ $('gateMsg').textContent = 'This demo is temporarily unavailable. Try again later.'; return; }
     sitePassword = value;
     sessionStorage.setItem('phn-pass', value);
     $('gateView').hidden = true; $('selectView').hidden = false;
@@ -120,14 +121,17 @@ def main() -> int:
         "        session_id: sessionId, user_id: 'ui-user',\n        password: sitePassword,",
         "send the password with each question",
     )
-    # The warm probe is a GET, so it cannot carry the JSON body /api/ask uses. It
-    # still spends Model Serving compute, so it takes the password as a query
-    # parameter instead.
+    # GET endpoints authenticate through a header so credentials never enter URLs.
+    out = must_replace(
+        out,
+        "fetch('/api/patients')",
+        "fetch('/api/patients', {headers: {'X-PHN-Password': sitePassword}})",
+        "authenticate the patient roster",
+    )
     out = must_replace(
         out,
         "await (await fetch('/api/warm')).json()",
-        "await (await fetch('/api/warm?password=' + "
-        "encodeURIComponent(sitePassword))).json()",
+        "await (await fetch('/api/warm', {headers: {'X-PHN-Password': sitePassword}})).json()",
         "authenticate the warm probe",
     )
     # boot() is called by the gate instead of on load.
@@ -145,7 +149,9 @@ def main() -> int:
         "wake bar carried over": "warmBar" in out,
         # Without this the probe hits /api/warm unauthenticated and 401s, and the
         # bar polls forever without ever reporting ready.
-        "warm probe authenticated": "/api/warm?password=" in out,
+        "warm probe authenticated": "fetch('/api/warm', {headers: {'X-PHN-Password': sitePassword}})" in out,
+        "roster authenticated": "fetch('/api/patients', {headers: {'X-PHN-Password': sitePassword}})" in out,
+        "no URL credentials": "/api/warm?password=" not in out,
         # Nothing may reference an identifier the gate script never defines.
         "no undeclared gate identifier":
             out.count("sitePassword") >= 3 and "let sitePassword =" in out,
