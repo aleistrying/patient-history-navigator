@@ -91,5 +91,22 @@ class AccessTests(unittest.TestCase):
         self.assertIn("fetch('/api/warm', {headers: {'X-PHN-Password': sitePassword}})", source)
         self.assertIn('!res.ok', source)
 
+    def test_link_key_opens_and_is_independent_of_password(self):
+        env = {'PHN_PASSWORD': 'test-only-passphrase', 'PHN_ACCESS_KEY': 'test-only-link-key'}
+        with patch.dict(os.environ, env, clear=True):
+            for credential in ('test-only-passphrase', 'test-only-link-key'):
+                response, _ = self.invoke(ask, {'password': credential, 'validate_only': True})
+                self.assertEqual(response['status'], 200)
+            response, _ = self.invoke(ask, {'password': 'other', 'validate_only': True})
+            self.assertEqual(response['status'], 401)
+        with patch.dict(os.environ, {'PHN_ACCESS_KEY': 'test-only-link-key'}, clear=True):
+            response, _ = self.invoke(ask, {'password': '', 'validate_only': True})
+            self.assertEqual(response['status'], 401)
+
+    def test_generated_frontend_unlocks_from_link_and_strips_key(self):
+        source = (ROOT / 'vercel/index.html').read_text()
+        self.assertIn("params.get('key')", source)
+        self.assertIn('history.replaceState', source)
+
 if __name__ == '__main__':
     unittest.main()

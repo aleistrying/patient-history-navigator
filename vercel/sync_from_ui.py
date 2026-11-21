@@ -34,6 +34,7 @@ GATE_MARKUP = """<!-- PASSWORD GATE (Vercel deployment only) -->
       <button class="send" id="gateBtn">Open</button>
     </div>
     <p class="note" id="gateMsg" style="margin-top:10px;color:var(--flag-high)"></p>
+    <p class="note" style="margin-top:6px">The first answer can take about a minute while the backend wakes up.</p>
   </div>
   <p class="stamp field">Synthetic demonstration data — not for clinical use</p>
 </main>
@@ -69,6 +70,35 @@ async function unlock(){
 $('gateBtn').addEventListener('click', unlock);
 $('gatePass').addEventListener('keydown', (e) => { if(e.key === 'Enter') unlock(); });
 if(sitePassword){ $('gateView').hidden = true; $('selectView').hidden = false; boot(); }
+
+/* ---------- unlock through the link (?key=...) ---------- */
+// A shared link such as /?key=<token> opens the demo without typing. The token is
+// checked by the same endpoint as the password, removed from the address bar at
+// once so it is not left in history or copied from the URL by accident, and kept
+// only for this tab. A wrong or missing key falls back to the password form.
+(async function unlockFromLink(){
+  const params = new URLSearchParams(location.search);
+  const key = (params.get('key') || '').trim();
+  if(!params.has('key')) return;
+  params.delete('key');
+  const rest = params.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  if(!key || sitePassword) return;
+  $('gateMsg').textContent = 'Opening the demo…';
+  try{
+    const res = await fetch('/api/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ validate_only: true, password: key }),
+    });
+    if(!res.ok){ $('gateMsg').textContent = 'This link is not valid. Enter the password instead.'; return; }
+    sitePassword = key;
+    sessionStorage.setItem('phn-pass', key);
+    $('gateView').hidden = true; $('selectView').hidden = false;
+    boot();
+  }catch{
+    $('gateMsg').textContent = 'Could not reach the server. Try again.';
+  }
+})();
 """
 
 

@@ -35,3 +35,16 @@ mlruns/
 complete-code/
 complete-code.zip
 databricks.zip
+
+# Local tooling and environment files; never part of the project
+.env
+.env.*
+.env*.local
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
+.codex/
+.agents/
+HANDOFF*

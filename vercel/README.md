@@ -78,6 +78,7 @@ repository). Add each to Production, Preview and Development.
 | `DATABRICKS_HOST` | `https://dbc-b7a36bd8-4a4a.cloud.databricks.com` | workspace to call |
 | `DATABRICKS_TOKEN` | a personal access token | signs the request |
 | `PHN_PASSWORD` | a long passphrase, shared out of band | stops strangers spending your compute |
+| `PHN_ACCESS_KEY` | a random token (optional) | lets a shared link `/?key=<token>` open the demo without typing the password. The page removes the key from the address bar on load. Rotate it with `vercel env rm` / `vercel env add` and a redeploy. |
 | `PHN_ENDPOINT` | `dbdemos-rag-prod` | optional, this is the default |
 
 Create the token with:
