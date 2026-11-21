@@ -956,17 +956,18 @@ $('gatePass').addEventListener('keydown', (e) => { if(e.key === 'Enter') unlock(
 if(sitePassword){ $('gateView').hidden = true; $('selectView').hidden = false; boot(); }
 
 /* ---------- unlock through the link (?key=...) ---------- */
+// window.history is explicit because the page has an element with id="history".
 // A shared link such as /?key=<token> opens the demo without typing. The token is
 // checked by the same endpoint as the password, removed from the address bar at
 // once so it is not left in history or copied from the URL by accident, and kept
 // only for this tab. A wrong or missing key falls back to the password form.
 (async function unlockFromLink(){
-  const params = new URLSearchParams(location.search);
+  const params = new URLSearchParams(window.location.search);
   const key = (params.get('key') || '').trim();
   if(!params.has('key')) return;
   params.delete('key');
   const rest = params.toString();
-  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  window.history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
   if(!key || sitePassword) return;
   $('gateMsg').textContent = 'Opening the demo…';
   try{

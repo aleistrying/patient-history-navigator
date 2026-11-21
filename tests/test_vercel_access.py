@@ -106,7 +106,7 @@ class AccessTests(unittest.TestCase):
     def test_generated_frontend_unlocks_from_link_and_strips_key(self):
         source = (ROOT / 'vercel/index.html').read_text()
         self.assertIn("params.get('key')", source)
-        self.assertIn('history.replaceState', source)
+        self.assertIn('window.history.replaceState', source)
 
 if __name__ == '__main__':
     unittest.main()
