@@ -39,7 +39,7 @@ table; RAG queries the chunk index.
 
 ## Try it
 
-**<https://patient-history-navigator.vercel.app>** — password-protected; ask the team for the password.
+**<https://patient-history-navigator.vercel.app>** — password-protected. Demo access on request.
 
 No install and no Databricks login. Pick one of five synthetic patients and ask.
 The serving endpoint scales to zero after about ten minutes idle — it releases its
@@ -88,21 +88,17 @@ Three embedding endpoints in the workspace are 1024-dimensional, so any of them 
 drop-in swap. `scripts/compare_embedding_models.py` ran all three over the same
 corpus and questions:
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/embeddings-dark.svg">
-  <img src="assets/embeddings-light.svg" width="100%"
-       alt="Bar chart: qwen3-embedding-0-6b leads on recall@5 (0.94), MRR (0.86), score margin (+0.279) and sustained throughput (21.4 chunks/s).">
-</picture>
+Retrieval quality was evaluated with recall@k and MRR on a held-out question set.
 
-| Model | Recall@5 | MRR | Margin | Sustained |
-| --- | --- | --- | --- | --- |
-| **databricks-qwen3-embedding-0-6b** (deployed) | **0.94** | **0.860** | **+0.279** | **21.4/s** at batch 16 |
-| databricks-bge-large-en | 0.92 | 0.802 | +0.142 | 20.9/s at batch 16 |
-| databricks-gte-large-en | 0.92 | 0.770 | +0.161 | 2.0/s at batch 8 (stalls at 16) |
+| Model | Margin | Sustained |
+| --- | --- | --- |
+| **databricks-qwen3-embedding-0-6b** (deployed) | **+0.279** | **21.4/s** at batch 16 |
+| databricks-bge-large-en | +0.142 | 20.9/s at batch 16 |
+| databricks-gte-large-en | +0.161 | 2.0/s at batch 8 (stalls at 16) |
 
-Recall barely separates them. The margin, the score gap between correct and
-incorrect chunks, is where the choice shows: roughly double, so the deployed model
-ranks the same documents with far more confidence.
+The margin is the score gap between correct and incorrect chunks. For the deployed
+model it is roughly double the others, so it ranks the same documents with far more
+confidence.
 
 ## The files in `databricks/`, and what each one does
 
