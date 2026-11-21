@@ -9,7 +9,7 @@ eight deterministic Python functions instead of generating an answer.
 It organises records. It does not diagnose, prescribe, or interpret clinical
 significance.
 
-**Team:** Alejandro Parparcen Grillet · Motunrayo Aduloju · Brayan Yesid Roncancio
+**Author:** Alejandro Parparcen Grillet. AI-assisted: I wrote it with the help of AI tools.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
